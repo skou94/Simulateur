@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    L'éditeur Godot compile en Debug : sans optimisation, le code C# de simulation
+    (dizaines de milliers de bâtiments par image) tourne 2 à 3 fois plus lentement.
+    On garde les symboles de débogage mais on active l'optimiseur partout.
+  -->
+  <PropertyGroup>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+</Project>
