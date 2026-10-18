@@ -31,6 +31,7 @@ uniform float fallout_v = 1.0;               // demi-largeur en travers, m
 
 uniform vec4 zone_radii = vec4(0.0);   // 140 kPa, 35 kPa, 7 kPa, brûlures 3e degré
 uniform float radiation_radius = 0.0;  // 500 rad
+uniform float induced_radius = 0.0;    // radioactivité induite ≥ 10 rad
 uniform float zones_visible = 0.0;
 
 varying vec3 world_pos;
@@ -138,6 +139,7 @@ void fragment() {
 		emission += vec3(1.0, 0.95, 0.3) * ring(d, zone_radii.z) * 2.0;
 		emission += vec3(1.0, 0.3, 0.8) * ring(d, zone_radii.w) * 2.0;
 		emission += vec3(0.3, 1.0, 0.4) * ring(d, radiation_radius) * 2.0;
+		emission += vec3(0.25, 0.9, 0.9) * ring(d, induced_radius) * 2.0;
 	}
 
 	ALBEDO = col;

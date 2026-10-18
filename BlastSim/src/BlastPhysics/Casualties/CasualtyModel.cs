@@ -11,6 +11,10 @@ public enum TimeOfDay { Day, Night }
 /// <summary>Ce que reçoit un point du sol (et donc ses occupants).</summary>
 /// <param name="ThirdDegreeCalPerCm2">Seuil de brûlure du 3ᵉ degré pour cet engin (0 sans rayonnement thermique).</param>
 /// <param name="SecondDegreeCalPerCm2">Seuil de brûlure du 2ᵉ degré pour cet engin.</param>
+/// <param name="ResidualRad">
+/// Dose résiduelle cumulée en plein air (retombées et radioactivité induite), atténuée à
+/// l'intérieur par le facteur de protection du bâtiment.
+/// </param>
 public readonly record struct Exposure(
     double OverpressurePa,
     double ImpulsePaS,
@@ -18,7 +22,7 @@ public readonly record struct Exposure(
     double ThirdDegreeCalPerCm2,
     double SecondDegreeCalPerCm2,
     double PromptRadiationRad,
-    double FalloutRad,
+    double ResidualRad,
     double FragmentHitProbability);
 
 /// <summary>Probabilités individuelles : décès, et blessure parmi les survivants.</summary>
@@ -117,7 +121,7 @@ public static class CasualtyModel
             else d.Add(0.02, 0.1);
         }
         double dose = e.PromptRadiationRad * PromptRadiationTransmission(type)
-                      + e.FalloutRad / FalloutProtectionFactor(type);
+                      + e.ResidualRad / FalloutProtectionFactor(type);
         d.Add(RadiationDeath(dose), RadiationInjury(dose));
         return d.Result;
     }
@@ -132,7 +136,7 @@ public static class CasualtyModel
         if (e.ThirdDegreeCalPerCm2 > 0)
             d.Add(Lognormal(e.ThermalCalPerCm2, 1.3 * e.ThirdDegreeCalPerCm2, 0.3),
                   Lognormal(e.ThermalCalPerCm2, e.SecondDegreeCalPerCm2, 0.3));
-        double dose = e.PromptRadiationRad + e.FalloutRad;
+        double dose = e.PromptRadiationRad + e.ResidualRad;
         d.Add(RadiationDeath(dose), RadiationInjury(dose));
         d.Add(0.25 * e.FragmentHitProbability, 0.75 * e.FragmentHitProbability);
         return d.Result;

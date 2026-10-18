@@ -72,7 +72,7 @@ public class CasualtyTests
     [Fact]
     public void Shelter_ProtectsAgainstFallout()
     {
-        var x = new Exposure(0, 0, 0, 0, 0, 0, FalloutRad: 600, 0);
+        var x = new Exposure(0, 0, 0, 0, 0, 0, ResidualRad: 600, 0);
         double outdoors = CasualtyModel.Outdoor(x).Death;
         double inConcrete = CasualtyModel.Indoor(StructureType.ReinforcedConcrete, DamageState.None, false, x).Death;
         Assert.True(outdoors > 0.8);

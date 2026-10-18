@@ -69,6 +69,8 @@ dotnet test        # lance la suite de tests
 | Éclats | Gurney + freinage, critères 79 J et 1/55.7 m² | DoD 6055.09 | ±30 % |
 | Dégâts aux bâtiments | Hyperboles pression-impulsion + fragilité lognormale | Baker et al. 1983 ; HAZUS | **seuils indicatifs** |
 | Cratère | R ≈ R1·W^(1/3.4) (nucléaire), D ≈ 0.8·W^(1/3) (chimique), réduit avec la hauteur | Glasstone & Dolan §6.70 ; Ambrosini et al. 2002 | facteur ~2 |
+| Radioactivité induite | ²⁸Al, ⁵⁶Mn, ²⁴Na proportionnels à la dose neutronique, calibrés sur Hiroshima | Glasstone & Dolan §9.31-9.37 ; DS86/DS02 | facteur ~3 |
+| Effet d'écran (jeu) | Éclair : lignes de visée vers la boule de feu ; souffle : jusqu'à −50 % derrière un obstacle, pondéré par H/(H+2L) | Glasstone ch. 7 ; UFC 3-340-02 | souffle : approché |
 | Victimes | Risques indépendants (état du bâtiment, incendie, souffle, brûlures, radiation, éclats), DL50 450 rad | HAZUS-MH ; Glasstone ch. 12 ; calibré sur Oughterson & Warren 1956 | facteur ~1.5 |
 | Retombées | WSEG-10, décroissance t^-1.2, protection des bâtiments | Hanifen 1980 ; FEMA (facteurs de protection) | facteur ~3 |
 
@@ -91,7 +93,9 @@ Le portage du modèle DNA et des courbes de radiation s'appuie sur la bibliothè
 
 ## Limites connues
 
-- Sol plat et idéal ; pas d'effet d'écran ni de canalisation par les bâtiments.
+- Sol plat et idéal ; effet d'écran des bâtiments calculé dans le jeu (pas de canalisation
+  de l'onde dans les rues) ; radioactivité induite surestimée pour Nagasaki (courbes
+  neutroniques génériques).
 - Impulsion nucléaire approchée par une onde de Friedlander (b = 1, ±30 %).
 - Thermobarique traité comme du TNT équivalent (onde plus longue non modélisée).
 - Retombées sans relief ni précipitations (« cas moyen » WSEG-10) ; cratère en sol sec par défaut.

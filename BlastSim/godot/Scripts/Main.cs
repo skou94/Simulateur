@@ -170,6 +170,9 @@ public partial class Main : Node3D
                     var sv = value.Split(',');
                     OnClicked(new Vector3(float.Parse(sv[0], inv), 5000f, float.Parse(sv[1], inv)), Vector3.Down, null);
                     break;
+                case "no-shielding":
+                    _hud.ShieldingEnabled = false;
+                    break;
                 case "night":
                     _hud.SelectTimeOfDay(TimeOfDay.Night);
                     break;
@@ -414,9 +417,13 @@ public partial class Main : Node3D
         sb.Append("[b]Reçu[/b]\n");
         sb.Append($"  surpression {Format.Pressure(r.Load.OverpressurePa)}, impulsion {r.Load.ImpulsePaS:N0} Pa·s\n");
         sb.Append($"  onde arrivée à T+{Format.Duration(r.Load.ArrivalTimeS)}\n");
+        if (r.BlastFactor < 0.99f) sb.Append($"  abrité du souffle par un bâtiment : pression ×{r.BlastFactor:0.00}\n");
+        if (r.StreetThermal > 0.1 || r.Load.ThermalCalPerCm2 > 0.1)
+            sb.Append($"  exposé à l'éclair : façade {r.FacadeLit:P0}, rue {r.StreetThermal:0.#} cal/cm²\n");
         if (r.Load.ThermalCalPerCm2 > 0.1) sb.Append($"  rayonnement thermique {r.Load.ThermalCalPerCm2:0.#} cal/cm²{(r.Burning ? " — [color=#ff8040]en feu[/color]" : "")}\n");
         if (r.Load.RadiationRad > 1) sb.Append($"  radiation initiale {r.Load.RadiationRad:N0} rad (en plein air)\n");
         if (r.FalloutRad > 1) sb.Append($"  retombées cumulées {r.FalloutRad:N0} rad (en plein air)\n");
+        if (r.InducedRad > 1) sb.Append($"  radioactivité induite cumulée {r.InducedRad:N0} rad (en plein air)\n");
         sb.Append($"\n[b]Sort[/b] : {state}\n");
         sb.Append($"  probabilités : légers {r.Damage.PLight:P0}, modérés {r.Damage.PModerate:P0}, graves {r.Damage.PSevere:P0}, effondrement {r.Damage.PCollapse:P0}\n");
         sb.Append($"  occupants : [b]{r.Deaths:N0}[/b] morts, [b]{r.Injured:N0}[/b] blessés attendus");
@@ -450,7 +457,12 @@ public partial class Main : Node3D
         var casualty = _detonation.Thermal is { } th
             ? new CasualtyContext(th.BurnThresholdCalPerCm2(BurnDegree.Third), th.BurnThresholdCalPerCm2(BurnDegree.Second))
             : new CasualtyContext(0, 0);
-        _cityView.Prepare(_profile, _groundZero, _thermalTime, casualty, _detonation.Crater.RadiusM);
+        Vector3? fireballCenter = _detonation.Fireball is { } ball
+            ? new Vector3(_groundZero.X, (float)Math.Max(ball.HeightOfBurstM, 0.6 * ball.MaxRadiusM), _groundZero.Y)
+            : null;
+        _cityView.Prepare(_profile, _groundZero, _thermalTime, casualty, _detonation.Crater.RadiusM,
+                          fireballCenter, _hud.ShieldingEnabled);
+        Mark("CityView.Prepare (dont écran)");
         _crater.Display(_detonation.Crater, _groundZero);
         _fallout = null;
         if (_detonation.NuclearDevice is { } device)
@@ -458,7 +470,8 @@ public partial class Main : Node3D
             var model = new Fallout(device, _detonation.Fireball!, _hud.WindSpeedMs, _hud.WindTowardDeg);
             if (model.ContactFraction > 0.01) _fallout = new FalloutField(model);
         }
-        _cityView.SetFallout(_fallout?.Model, _groundZero);
+        _cityView.SetResidual(_fallout?.Model, _detonation.Induced, _groundZero);
+        _inducedRadius = _detonation.Induced?.RangeForInfiniteDose(InducedZoneRad) ?? 0;
         Mark("Retombées");
         Mark("CityView.Prepare");
         _fx.Position = new Vector3(_groundZero.X, 0f, _groundZero.Y);
@@ -524,7 +537,12 @@ public partial class Main : Node3D
                      $"prims={Performance.GetMonitor(Performance.Monitor.RenderTotalPrimitivesInFrame) / 1e6:0.00}M");
             _benchmarkWindow = 0; _benchmarkFrames = 0; _cpuMs = _gpuMs = _cpuMax = _gpuMax = _simSum = _fxSum = 0;
         }
-        if (_benchmarkClock >= _benchmarkSeconds) GetTree().Quit();
+        if (_benchmarkClock >= _benchmarkSeconds)
+        {
+            var t = _cityView.Tally;
+            GD.Print($"[bench] bilan : {t.Deaths:N0} morts, {t.Injured:N0} blessés, {t.Collapsed} effondrés, {t.Burning} en feu");
+            GetTree().Quit();
+        }
     }
 
     public override void _Process(double delta)
@@ -580,6 +598,7 @@ public partial class Main : Node3D
             (float)_radii.Overpressure140KPaM, (float)_radii.Overpressure35KPaM,
             (float)_radii.Overpressure7KPaM, (float)_radii.ThirdDegreeBurnsM));
         _groundMat.SetShaderParameter("radiation_radius", (float)_radii.Radiation500RadM);
+        _groundMat.SetShaderParameter("induced_radius", (float)_inducedRadius);
         _groundMat.SetShaderParameter("crater_radius", active ? (float)_detonation!.Crater.RadiusM : 0f);
         _groundMat.SetShaderParameter("fallout_on", active && _fallout is not null ? 1f : 0f);
         if (active && _fallout is { } f)
@@ -618,17 +637,28 @@ public partial class Main : Node3D
                DescribeFallout() + fps;
     }
 
+    // Zone de radioactivité induite affichée : dose cumulée ≥ 10 rad pour une présence illimitée.
+    private const double InducedZoneRad = 10.0;
+    private double _inducedRadius;
+
     private string DescribeFallout()
     {
-        if (_fallout is not { } f) return "";
+        string induced = "";
+        if (_detonation?.Induced is { } ia && ia.InfiniteDoseAt(0) >= 1)
+            induced = $"Radioactivité induite au point zéro : {ia.DoseRateAt(0, _time / 3600.0):0.#} rad/h\n";
+        if (_fallout is not { } f) return induced;
         double hours = _time / 3600.0;
         if (hours < f.FirstArrivalHours)
-            return $"Retombées : premières arrivées dans {Format.Duration((f.FirstArrivalHours - hours) * 3600)} (zone prévue en pointillés)\n";
-        return $"Retombées : dose cumulée maximale {f.MaxDoseNow:N0} rad (en plein air)\n";
+            return induced + $"Retombées : premières arrivées dans {Format.Duration((f.FirstArrivalHours - hours) * 3600)} (zone prévue en pointillés)\n";
+        return induced + $"Retombées : dose cumulée maximale {f.MaxDoseNow:N0} rad (en plein air)\n";
     }
 
-    private static string DescribeRadii(Detonation d, EffectRadii r, FalloutField? fallout)
+    private string DescribeRadii(Detonation d, EffectRadii r, FalloutField? fallout)
     {
+        double inducedRange = d.Induced?.RangeForInfiniteDose(InducedZoneRad) ?? 0;
+        string inducedRow = inducedRange > 0
+            ? $"[color=#40e0e0]●[/color] Radioactivité induite ≥ 10 rad (présence illimitée) : [b]{Format.Distance(inducedRange)}[/b]\n"
+            : "";
         string craterRow = d.Crater.Exists
             ? $"[color=#a07850]●[/color] Cratère : [b]{Format.Distance(2 * d.Crater.RadiusM)}[/b] de diamètre, {Format.Distance(d.Crater.DepthM)} de profondeur (sol sec)\n"
             : "";
@@ -648,6 +678,6 @@ public partial class Main : Node3D
                Row("#fff070", "7 kPa — vitres, dégâts légers", r.Overpressure7KPaM) +
                Row("#ff5ad0", "Brûlures du 3e degré", r.ThirdDegreeBurnsM) +
                Row("#55ff77", "Radiation initiale 500 rad (1re minute, cercle)", r.Radiation500RadM) +
-               Row("#bbbbbb", "Danger des éclats", r.FragmentHazardM) + craterRow + falloutRow;
+               Row("#bbbbbb", "Danger des éclats", r.FragmentHazardM) + craterRow + inducedRow + falloutRow;
     }
 }

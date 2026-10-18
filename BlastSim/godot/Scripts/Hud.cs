@@ -25,6 +25,14 @@ public partial class Hud : CanvasLayer
     private OptionButton _scenario = null!, _mode = null!, _moment = null!, _cityChoice = null!;
     private Label _cityStatus = null!, _attribution = null!;
     private PanelContainer _buildingPanel = null!;
+    private CheckBox _shielding = null!;
+
+    /// <summary>Effet d'écran des bâtiments sur l'éclair et le souffle (pris en compte à la prochaine détonation).</summary>
+    public bool ShieldingEnabled
+    {
+        get => _shielding.ButtonPressed;
+        set => _shielding.ButtonPressed = value;
+    }
     private RichTextLabel _buildingInfo = null!;
     private HSlider _yield = null!, _height = null!, _time = null!, _windDir = null!, _windSpeed = null!;
     private Label _yieldLabel = null!, _heightLabel = null!, _timeLabel = null!, _windLabel = null!, _windSpeedLabel = null!;
@@ -117,6 +125,9 @@ public partial class Hud : CanvasLayer
         moment.ItemSelected += i => TimeOfDayChanged?.Invoke(i == 0 ? TimeOfDay.Day : TimeOfDay.Night);
         box.AddChild(moment);
         _moment = moment;
+
+        _shielding = new CheckBox { Text = "Effet d'écran des bâtiments", ButtonPressed = true };
+        box.AddChild(_shielding);
 
         var zones = new CheckBox { Text = "Afficher les zones d'effet", ButtonPressed = true };
         zones.Toggled += on => ZonesToggled?.Invoke(on);

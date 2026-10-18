@@ -31,6 +31,10 @@ découle directement du calcul.
 - **Les retombées radioactives** (modèle WSEG-10) : panache poussé par le vent, dose
   cumulée qui s'étend heure après heure, victimes recalculées selon l'abri qu'offre
   chaque bâtiment. Nulles pour une explosion aérienne, majeures au sol.
+- **La radioactivité induite** : les neutrons rendent le sol radioactif près du point
+  zéro, y compris pour une explosion en altitude (qui ne produit pas de retombées).
+- **L'effet d'écran des bâtiments** : les immeubles masquent l'éclair (ombres, moins
+  d'incendies et de brûlures) et, pour une petite charge, abritent du souffle.
 - **Le cratère** des explosions au sol, creusé dans le terrain ; les bâtiments qui s'y
   trouvaient disparaissent.
 - **La fiche de chaque bâtiment** : un clic sur un bâtiment montre ce qu'il a reçu
@@ -108,6 +112,7 @@ sans abri : ~450 rad).
 | Vitesse du temps | de ×0,01 (ralenti) à ×4 000 ; utile pour les fortes puissances et pour les retombées, qui se jouent sur des heures |
 | Vent | direction vers laquelle il souffle et vitesse : orientent et allongent le panache de retombées |
 | Moment de l'explosion | jour (gens au travail, 25 % dehors) ou nuit (gens chez eux, 4 % dehors) |
+| Effet d'écran des bâtiments | active ou non la protection apportée par les immeubles, pour comparer |
 | Afficher les zones d'effet | cercles au sol des seuils de dégâts |
 | Réinitialiser / Nouvelle ville | remet la ville en état / génère une autre ville |
 
@@ -127,6 +132,7 @@ Godot_v4.7.2-stable_mono_win64.exe --path BlastSim/godot -- --demo --scenario=5 
 | `--city=N` | 1 Paris, 2 Manhattan, 3 Londres, 4 Hiroshima, 5 Beyrouth |
 | `--wind=direction,vitesse` | vent (degrés vers lesquels il souffle, m/s) |
 | `--night` | explosion de nuit |
+| `--no-shielding` | désactive l'effet d'écran des bâtiments |
 | `--select=x,z` | ouvre la fiche du bâtiment situé au point (x, z), en mètres |
 | `--time-scale=x` | vitesse du temps |
 | `--camera=distance,lacet,tangage` | position de la caméra (mètres, radians) |
@@ -158,7 +164,7 @@ Les modèles viennent de sources de référence : modèle de souffle DNA (BLAST.
 Kinney-Graham pour le TNT, *The Effects of Nuclear Weapons* de Glasstone & Dolan pour le
 thermique et la radiation, critères DoD pour les éclats, WSEG-10 pour les retombées,
 HAZUS pour les victimes par état de dégât, Glasstone & Dolan et Ambrosini pour les
-cratères. Les 68 tests automatiques vérifient notamment :
+cratères. Les 72 tests automatiques vérifient notamment :
 
 | Cas | Calculé | Référence |
 |---|---|---|
@@ -169,6 +175,7 @@ cratères. Les 68 tests automatiques vérifient notamment :
 | Trinity, rayon de la boule de feu à 25 ms | ~138 m | 130 m (analyse de G. I. Taylor) |
 | Grenade M67, rayon de danger des éclats | 16 m | 15 m |
 | Cactus (18 kt sur corail), diamètre du cratère | ~120 m | ~110 m |
+| Hiroshima, radioactivité induite cumulée à l'hypocentre | ~80 rad | ~80 rad (estimations DS86/DS02) |
 | Castle Bravo, dose sur 48 h à 180 km sous le vent | ~1 200 rad (dans l'axe) | Rongelap : ~190 rad (hors de l'axe) |
 
 Pour lancer les tests :
@@ -178,7 +185,7 @@ cd BlastSim
 dotnet test
 ```
 
-**Limites connues** : sol plat (pas d'effet d'écran des bâtiments) ; bâtiments OSM
+**Limites connues** : sol plat, sans relief ; effet d'écran sur le souffle approché ; bâtiments OSM
 approchés par des rectangles de même surface ; seuils de dégâts aux bâtiments indicatifs ;
 bilan des victimes précis à un facteur ~1,5 ; retombées « cas moyen » (WSEG-10), sans
 relief ni pluie, précises à un facteur ~3 ; cratères calculés en sol sec (×2 environ dans

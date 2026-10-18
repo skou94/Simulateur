@@ -17,7 +17,8 @@ public readonly record struct DamageTally(
 public readonly record struct BuildingReport(
     int Index, StructureType Structure, Occupancy Use, float OriginalHeightM, int Floors, float FootprintM2,
     double Occupants, bool Active, double DistanceM, bool BlastArrived, RadialProfile.Sample Load,
-    DamageAssessment Damage, DamageState State, bool Vaporized, bool Burning, double FalloutRad,
+    DamageAssessment Damage, DamageState State, bool Vaporized, bool Burning, double FalloutRad, double InducedRad,
+    float FacadeLit, double StreetThermal, float BlastFactor,
     double Deaths, double Injured);
 
 /// <summary>Paramètres de l'estimation des victimes pour une détonation.</summary>
@@ -61,7 +62,7 @@ public partial class CityView : MultiMeshInstance3D
         public double AnimStart, AnimDuration;
         public double FireStart;
         public float Fire, Char, Broken;
-        public float FalloutRad;
+        public float FalloutRad, InducedRad;
         public bool Vaporized;
     }
 
@@ -86,11 +87,16 @@ public partial class CityView : MultiMeshInstance3D
     private CasualtyContext _casualty;
     private float _craterRadius;
 
+    // Effet d'écran : fraction éclairée de la façade, flux reçu dans la rue, facteur de souffle.
+    private Shielding _shielding = null!;
+    private float[] _facadeLit = Array.Empty<float>(), _streetThermal = Array.Empty<float>(), _blastFactor = Array.Empty<float>();
+
     // Retombées : débit H+1 et arrivée par bâtiment ; dose réévaluée par tranches.
     private float[] _falloutRate = Array.Empty<float>(), _falloutArrival = Array.Empty<float>();
-    private bool _hasFallout;
-    private int _falloutCursor;
-    private const int FalloutSlice = 3000;
+    private float[] _inducedInfinite = Array.Empty<float>();
+    private bool _hasFallout, _hasInduced;
+    private int _residualCursor;
+    private const int ResidualSlice = 3000;
 
     /// <summary>Moment de la journée : répartition de la population (effet à la prochaine détonation).</summary>
     public TimeOfDay TimeOfDay { get; set; } = TimeOfDay.Day;
@@ -124,7 +130,9 @@ public partial class CityView : MultiMeshInstance3D
         _cosYaw = new float[n]; _sinYaw = new float[n];
         _tiltAxisX = new float[n]; _tiltAxisZ = new float[n];
         _occupants = new float[n];
-        _falloutRate = new float[n]; _falloutArrival = new float[n];
+        _facadeLit = new float[n]; _streetThermal = new float[n]; _blastFactor = new float[n];
+        _shielding = new Shielding(city);
+        _falloutRate = new float[n]; _falloutArrival = new float[n]; _inducedInfinite = new float[n];
         _deaths = new double[n]; _injured = new double[n];
         for (int i = 0; i < n; i++)
         {
@@ -143,7 +151,7 @@ public partial class CityView : MultiMeshInstance3D
     public void ResetDamage()
     {
         _profile = null;
-        _hasFallout = false;
+        _hasFallout = _hasInduced = false;
         _thermalDone = false;
         _animating.Clear();
         _igniting.Clear();
@@ -163,8 +171,10 @@ public partial class CityView : MultiMeshInstance3D
     }
 
     /// <summary>Prépare l'impact : charge de chaque bâtiment selon sa distance au point zéro.</summary>
+    /// <param name="fireball">Centre de la boule de feu (source de l'éclair), null sans rayonnement thermique.</param>
+    /// <param name="shielding">Effet d'écran des bâtiments sur l'éclair et le souffle.</param>
     public void Prepare(RadialProfile profile, Vector2 groundZero, double thermalTimeS, CasualtyContext casualty,
-                        double craterRadiusM = 0)
+                        double craterRadiusM = 0, Vector3? fireball = null, bool shielding = true)
     {
         ResetDamage();
         _craterRadius = (float)craterRadiusM;
@@ -186,47 +196,120 @@ public partial class CityView : MultiMeshInstance3D
             _tiltAxisZ[i] = -rx;
             arrival[i] = _state[i].Load.ArrivalTimeS;
         }
+        ApplyShielding(groundZero, fireball, shielding);
+
         _byArrival = new int[_state.Length];
         for (int i = 0; i < _byArrival.Length; i++) _byArrival[i] = i;
         Array.Sort(arrival, _byArrival);
         _nextArrival = 0;
     }
 
-    /// <summary>Retombées de la détonation en cours (null : explosion aérienne ou conventionnelle).</summary>
-    public void SetFallout(Fallout? model, Vector2 groundZero)
+    /// <summary>
+    /// Doses résiduelles de la détonation en cours : retombées (null pour une explosion
+    /// aérienne ou conventionnelle) et radioactivité induite près du point zéro.
+    /// </summary>
+    public void SetResidual(Fallout? fallout, InducedActivity? induced, Vector2 groundZero)
     {
-        _hasFallout = model is { ContactFraction: > 0 };
-        if (!_hasFallout) return;
+        _hasFallout = fallout is { ContactFraction: > 0 };
+        _hasInduced = induced is not null;
         for (int i = 0; i < _state.Length; i++)
         {
             var b = _city.Buildings[i];
-            _falloutRate[i] = (float)model!.DoseRateAtH1(b.X - groundZero.X, b.Z - groundZero.Y);
-            _falloutArrival[i] = (float)model.ArrivalTimeHours(b.X - groundZero.X, b.Z - groundZero.Y);
+            double x = b.X - groundZero.X, z = b.Z - groundZero.Y;
+            _falloutRate[i] = _hasFallout ? (float)fallout!.DoseRateAtH1(x, z) : 0f;
+            _falloutArrival[i] = _hasFallout ? (float)fallout!.ArrivalTimeHours(x, z) : 0f;
+            _inducedInfinite[i] = _hasInduced ? (float)induced!.InfiniteDoseAt(_state[i].Distance) : 0f;
         }
-        _falloutCursor = 0;
+        _residualCursor = 0;
     }
 
-    private void UpdateFallout(double t)
+    // Réévaluation par tranches : charge constante quelle que soit la taille de la ville.
+    private void UpdateResidual(double t)
     {
         double hours = t / 3600.0;
         int n = _state.Length;
-        for (int k = 0; k < FalloutSlice && k < n; k++)
+        for (int k = 0; k < ResidualSlice && k < n; k++)
         {
-            int i = _falloutCursor;
-            _falloutCursor = (_falloutCursor + 1) % n;
-            if (_falloutRate[i] <= 0) continue;
+            int i = _residualCursor;
+            _residualCursor = (_residualCursor + 1) % n;
+            if (_falloutRate[i] <= 0 && _inducedInfinite[i] < 0.01f) continue;
             ref var s = ref _state[i];
-            float dose = (float)Fallout.DoseFromRate(_falloutRate[i], _falloutArrival[i], hours);
-            if (dose - s.FalloutRad < 0.01f * Math.Max(s.FalloutRad, 1f)) continue;
-            s.FalloutRad = dose;
+            float fallout = (float)Fallout.DoseFromRate(_falloutRate[i], _falloutArrival[i], hours);
+            float induced = (float)InducedActivity.DoseFromInfinite(_inducedInfinite[i], hours);
+            float before = s.FalloutRad + s.InducedRad;
+            if (fallout + induced - before < 0.01f * Math.Max(before, 1f)) continue;
+            s.FalloutRad = fallout;
+            s.InducedRad = induced;
             if (s.BlastResolved) UpdateCasualties(i);
         }
+    }
+
+    // Applique l'effet d'écran aux charges reçues : surpression et impulsion réduites derrière
+    // un obstacle, flux thermique de façade et de rue selon ce qui voit la boule de feu.
+    private void ApplyShielding(Vector2 groundZero, Vector3? fireball, bool enabled)
+    {
+        int n = _state.Length;
+        for (int i = 0; i < n; i++)
+        {
+            _facadeLit[i] = 1f;
+            _blastFactor[i] = 1f;
+            _streetThermal[i] = (float)_state[i].Load.ThermalCalPerCm2;
+        }
+        _thermalShadow = null;
+        if (!enabled) return;
+        _blastFactor = _shielding.Blast(groundZero.X, groundZero.Y, i =>
+        {
+            // Durée de phase positive déduite de l'impulsion : I ≈ 0.4·P·td.
+            var l = _state[i].Load;
+            return (float)(l.ImpulsePaS / Math.Max(0.4 * l.OverpressurePa, 1e-3));
+        });
+        for (int i = 0; i < n; i++)
+        {
+            ref var s = ref _state[i];
+            s.Load = s.Load with
+            {
+                OverpressurePa = s.Load.OverpressurePa * _blastFactor[i],
+                ImpulsePaS = s.Load.ImpulsePaS * _blastFactor[i],
+            };
+        }
+        // Ombres de l'éclair (~0.1 s de calcul) : en tâche de fond pour ne pas figer l'image ;
+        // appliquées avant les incendies et le bilan des victimes (voir Simulate).
+        if (fireball is { } f)
+            _thermalShadow = System.Threading.Tasks.Task.Run(() => _shielding.Thermal(f.X, f.Y, f.Z));
+    }
+
+    private System.Threading.Tasks.Task<(float[] Facade, float[] Street)>? _thermalShadow;
+
+    // Vrai tant que les ombres de l'éclair ne sont pas prêtes ; les applique dès qu'elles le sont.
+    private bool WaitingForThermalShadow()
+    {
+        if (_thermalShadow is null) return false;
+        if (!_thermalShadow.IsCompleted) return true;
+        var (facade, street) = _thermalShadow.Result;
+        _thermalShadow = null;
+        _facadeLit = facade;
+        for (int i = 0; i < _state.Length; i++)
+        {
+            ref var s = ref _state[i];
+            double q = s.Load.ThermalCalPerCm2;
+            _streetThermal[i] = (float)(q * street[i]);
+            s.Load = s.Load with { ThermalCalPerCm2 = q * facade[i] };
+        }
+        return false;
     }
 
     /// <summary>Fait avancer les effets jusqu'au temps de simulation t (s depuis l'explosion).</summary>
     public void Simulate(double t)
     {
         if (_profile is null) return;
+
+        // Tant que les ombres de l'éclair se calculent, incendies et souffle attendent
+        // (quelques images au plus) ; ils rattrapent ensuite le temps écoulé.
+        if (WaitingForThermalShadow())
+        {
+            Flush();
+            return;
+        }
 
         if (!_thermalDone && t >= _thermalTimeS)
         {
@@ -265,7 +348,7 @@ public partial class CityView : MultiMeshInstance3D
             if (s.Fire >= 1f) RemoveSwap(_igniting, k);
         }
 
-        if (_hasFallout) UpdateFallout(t);
+        if (_hasFallout || _hasInduced) UpdateResidual(t);
 
         Flush();
     }
@@ -375,9 +458,10 @@ public partial class CityView : MultiMeshInstance3D
     {
         ref var s = ref _state[i];
         var b = _city.Buildings[i];
-        var exposure = new Exposure(s.Load.OverpressurePa, s.Load.ImpulsePaS, s.Load.ThermalCalPerCm2,
+        // Dehors, l'éclair atteint les gens selon ce que la rue voit de la boule de feu.
+        var exposure = new Exposure(s.Load.OverpressurePa, s.Load.ImpulsePaS, _streetThermal[i],
                                     _casualty.ThirdDegreeCalPerCm2, _casualty.SecondDegreeCalPerCm2,
-                                    s.Load.RadiationRad, s.FalloutRad, s.Load.FragmentHitProbability);
+                                    s.Load.RadiationRad, s.FalloutRad + s.InducedRad, s.Load.FragmentHitProbability);
         var risk = s.Distance < _craterRadius
             ? new CasualtyRisk(1.0, 0.0)
             : CasualtyModel.Occupant(b.Structure, s.Damage, s.Burning, exposure, TimeOfDay);
@@ -495,7 +579,8 @@ public partial class CityView : MultiMeshInstance3D
         return new BuildingReport(
             i, b.Structure, b.Use, b.Height, (int)MathF.Max(1f, MathF.Round(b.Height / 3.2f)), b.Width * b.Depth,
             _occupants[i], _profile is not null, s.Distance, s.BlastResolved, s.Load, damage, s.Damage,
-            s.Vaporized, s.Burning, s.FalloutRad, _deaths[i], _injured[i]);
+            s.Vaporized, s.Burning, s.FalloutRad, s.InducedRad, _facadeLit[i], _streetThermal[i], _blastFactor[i],
+            _deaths[i], _injured[i]);
     }
 
     private void DecrementState(DamageState state)

@@ -56,6 +56,9 @@ public sealed class Detonation
     public Fireball? Fireball { get; private init; }
     public ThermalRadiation? Thermal { get; private init; }
     public InitialRadiation? Radiation { get; private init; }
+
+    /// <summary>Radioactivité induite dans le sol par les neutrons (nucléaire seulement).</summary>
+    public InducedActivity? Induced { get; private init; }
     public Fragmentation? Fragments { get; private init; }
 
     /// <summary>Cratère apparent (rayon nul pour une explosion en altitude).</summary>
@@ -71,13 +74,15 @@ public sealed class Detonation
         var ambient = Atmosphere.At(groundElevationM);
         var blast = new Airblast(NuclearFreeAirCurve.Instance, device.BlastEquivalentKt, heightOfBurstM, ambient);
         var fireball = new Fireball(device, heightOfBurstM, ambient);
+        var radiation = new InitialRadiation(device, fireball, ambient);
         return new Detonation(name ?? $"Nucléaire {device.YieldKt:G4} kt", heightOfBurstM, groundElevationM, blast)
         {
             NuclearDevice = device,
             Fireball = fireball,
             Thermal = new ThermalRadiation(device, fireball, visibilityKm),
-            Radiation = new InitialRadiation(device, fireball, ambient),
+            Radiation = radiation,
             Crater = Crater.ForNuclear(device, fireball),
+            Induced = new InducedActivity(radiation),
         };
     }
 
