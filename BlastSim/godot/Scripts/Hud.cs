@@ -24,6 +24,8 @@ public partial class Hud : CanvasLayer
 
     private OptionButton _scenario = null!, _mode = null!, _moment = null!, _cityChoice = null!;
     private Label _cityStatus = null!, _attribution = null!;
+    private PanelContainer _buildingPanel = null!;
+    private RichTextLabel _buildingInfo = null!;
     private HSlider _yield = null!, _height = null!, _time = null!, _windDir = null!, _windSpeed = null!;
     private Label _yieldLabel = null!, _heightLabel = null!, _timeLabel = null!, _windLabel = null!, _windSpeedLabel = null!;
     private RichTextLabel _info = null!;
@@ -141,11 +143,32 @@ public partial class Hud : CanvasLayer
 
         var help = new Label
         {
-            Text = "Clic : point d'impact · Glisser : orbite\nClic droit : déplacer · Molette : zoom\nEspace : pause",
+            Text = "Clic : bâtiment ou point d'impact · Glisser : orbite\nClic droit : déplacer · Molette : zoom\nEspace : pause · Échap : fermer la fiche",
             Modulate = new Color(1, 1, 1, 0.55f),
         };
         help.AddThemeFontSizeOverride("font_size", 13);
         box.AddChild(help);
+
+        // Fiche du bâtiment sélectionné, en bas à gauche.
+        _buildingPanel = new PanelContainer { Visible = false, MouseFilter = Control.MouseFilterEnum.Ignore };
+        _buildingPanel.AddThemeStyleboxOverride("panel", new StyleBoxFlat
+        {
+            BgColor = new Color(0.06f, 0.07f, 0.09f, 0.88f),
+            ContentMarginLeft = 14, ContentMarginRight = 14, ContentMarginTop = 10, ContentMarginBottom = 10,
+            CornerRadiusTopLeft = 8, CornerRadiusTopRight = 8, CornerRadiusBottomLeft = 8, CornerRadiusBottomRight = 8,
+            BorderColor = new Color(0.3f, 0.9f, 1f, 0.6f), BorderWidthLeft = 2,
+        });
+        _buildingPanel.SetAnchorsPreset(Control.LayoutPreset.BottomLeft);
+        _buildingPanel.GrowVertical = Control.GrowDirection.Begin;
+        _buildingPanel.OffsetLeft = 16;
+        _buildingPanel.OffsetBottom = -36;
+        _buildingPanel.CustomMinimumSize = new Vector2(470, 0);
+        _buildingInfo = new RichTextLabel { BbcodeEnabled = true, FitContent = true, ScrollActive = false,
+                                            MouseFilter = Control.MouseFilterEnum.Ignore };
+        _buildingInfo.AddThemeFontSizeOverride("normal_font_size", 14);
+        _buildingInfo.AddThemeFontSizeOverride("bold_font_size", 14);
+        _buildingPanel.AddChild(_buildingInfo);
+        AddChild(_buildingPanel);
 
         _attribution = new Label { Modulate = new Color(1, 1, 1, 0.75f) };
         _attribution.AddThemeFontSizeOverride("font_size", 12);
@@ -193,6 +216,14 @@ public partial class Hud : CanvasLayer
     }
 
     public void SetCityStatus(string text) => _cityStatus.Text = text;
+
+    /// <summary>Affiche la fiche d'un bâtiment, ou la masque (null).</summary>
+    public void SetBuildingInfo(string? bbcode)
+    {
+        _buildingPanel.Visible = bbcode is not null;
+        if (bbcode is not null)
+            _buildingInfo.Text = bbcode + "\n[color=#888888]Échap : fermer[/color]";
+    }
 
     public void SetAttribution(string text) => _attribution.Text = text;
 

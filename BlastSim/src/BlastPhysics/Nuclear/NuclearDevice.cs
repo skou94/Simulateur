@@ -17,6 +17,10 @@ public enum NuclearDesign
 /// </summary>
 /// <param name="YieldKt">Rendement total, kt.</param>
 /// <param name="FissionFraction">Part du rendement issue de la fission (1 pour une arme A).</param>
+/// <param name="RadiationScale">
+/// Correction de la radiation initiale propre à un engin, quand une dosimétrie de
+/// référence existe (ex. Hiroshima, DS02) ; 1 pour les courbes génériques de Glasstone.
+/// </param>
 /// <param name="HighRadiationOutput">
 /// Cas haut de Glasstone pour la radiation initiale (ex. arme à canon à uranium,
 /// peu écrantée) ; sinon cas bas.
@@ -25,7 +29,8 @@ public sealed record NuclearDevice(
     double YieldKt,
     NuclearDesign Design = NuclearDesign.Fission,
     double FissionFraction = 1.0,
-    bool HighRadiationOutput = false)
+    bool HighRadiationOutput = false,
+    double RadiationScale = 1.0)
 {
     /// <summary>
     /// Rendement à injecter dans la courbe de souffle DNA, qui est normalisée pour

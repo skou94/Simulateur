@@ -29,6 +29,7 @@ public partial class Main : Node3D
     private EffectRadii _radii;
     private ExplosionView _fx = null!;
     private FalloutField? _fallout;
+    private CraterView _crater = null!;
     private Vector2 _groundZero = Vector2.Zero;
     private MeshInstance3D _marker = null!;
     private double _time;
@@ -50,10 +51,30 @@ public partial class Main : Node3D
 
         _camera = new OrbitCamera();
         AddChild(_camera);
-        _camera.GroundClicked += OnGroundClicked;
+        _camera.Clicked += OnClicked;
+
+        _selectionBox = new MeshInstance3D
+        {
+            Mesh = new BoxMesh { Size = Vector3.One },
+            MaterialOverride = new StandardMaterial3D
+            {
+                Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+                AlbedoColor = new Color(0.3f, 0.9f, 1f, 0.25f),
+                EmissionEnabled = true,
+                Emission = new Color(0.3f, 0.9f, 1f),
+                EmissionEnergyMultiplier = 1.5f,
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            },
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Visible = false,
+        };
+        AddChild(_selectionBox);
 
         _fx = new ExplosionView();
         AddChild(_fx);
+        _crater = new CraterView();
+        AddChild(_crater);
         StartShaderWarmup();
 
         _marker = new MeshInstance3D
@@ -143,6 +164,11 @@ public partial class Main : Node3D
                 case "wind":
                     var wv = value.Split(',');
                     _hud.SetWind(double.Parse(wv[0], inv), double.Parse(wv[1], inv));
+                    break;
+                case "select":
+                    // --select=x,z : clic simulé à la verticale d'un point (tests, démonstrations).
+                    var sv = value.Split(',');
+                    OnClicked(new Vector3(float.Parse(sv[0], inv), 5000f, float.Parse(sv[1], inv)), Vector3.Down, null);
                     break;
                 case "night":
                     _hud.SelectTimeOfDay(TimeOfDay.Night);
@@ -240,6 +266,7 @@ public partial class Main : Node3D
 
     private void ShowCity(CityModel city)
     {
+        Select(-1);
         _city = city;
         _cityView.Build(_city);
         _groundZero = Vector2.Zero;
@@ -316,10 +343,84 @@ public partial class Main : Node3D
         _cityLoading = null;
     }
 
-    private void OnGroundClicked(Vector3 p)
+    // Clic : un bâtiment visé est sélectionné ; sinon, hors simulation, on place le point d'impact.
+    private int _selected = -1;
+    private double _selectionRefresh;
+    private MeshInstance3D _selectionBox = null!;
+
+    private void OnClicked(Vector3 origin, Vector3 direction, Vector3? ground)
     {
-        if (_fx.Active) return; // pas de déplacement pendant une simulation
-        _groundZero = new Vector2(p.X, p.Z);
+        int hit = _cityView.Pick(origin, direction);
+        if (hit >= 0)
+        {
+            Select(hit);
+            return;
+        }
+        Select(-1);
+        if (!_fx.Active && ground is { } p) _groundZero = new Vector2(p.X, p.Z);
+    }
+
+    private void Select(int index)
+    {
+        _selected = index;
+        _selectionRefresh = 0;
+        _selectionBox.Visible = index >= 0;
+        if (index < 0) _hud.SetBuildingInfo(null);
+    }
+
+    private void UpdateSelection(double delta)
+    {
+        if (_selected < 0) return;
+        _selectionBox.Transform = _cityView.InstanceTransform(_selected).ScaledLocal(new Vector3(1.06f, 1.02f, 1.06f));
+        _selectionRefresh -= delta;
+        if (_selectionRefresh > 0) return;
+        _selectionRefresh = 0.2;
+        _hud.SetBuildingInfo(DescribeBuilding(_cityView.Report(_selected)));
+    }
+
+    private string DescribeBuilding(BuildingReport r)
+    {
+        static string Structure(BlastPhysics.Damage.StructureType t) => t switch
+        {
+            BlastPhysics.Damage.StructureType.WoodFrame => "ossature bois",
+            BlastPhysics.Damage.StructureType.UnreinforcedMasonry => "maçonnerie",
+            BlastPhysics.Damage.StructureType.ReinforcedConcrete => "béton armé",
+            _ => "charpente acier",
+        };
+        string state = r.Vaporized ? "[color=#ff5050]pulvérisé (dans le cratère)[/color]" : r.State switch
+        {
+            BlastPhysics.Damage.DamageState.Collapse => "[color=#ff5050]effondré[/color]",
+            BlastPhysics.Damage.DamageState.Severe => "[color=#ff9a40]dégâts graves[/color]",
+            BlastPhysics.Damage.DamageState.Moderate => "[color=#ffd060]dégâts modérés[/color]",
+            BlastPhysics.Damage.DamageState.Light => "[color=#e0e070]dégâts légers[/color]",
+            _ => "[color=#80e080]intact[/color]",
+        };
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"[b]Bâtiment n° {r.Index}[/b] — {Structure(r.Structure)}, {(r.Use == Occupancy.Office ? "bureaux" : "logements")}\n");
+        sb.Append($"Hauteur {r.OriginalHeightM:0} m ({r.Floors} niveaux), emprise {r.FootprintM2:N0} m²\n");
+        sb.Append($"Occupants présents : {r.Occupants:N0}\n");
+        if (!r.Active)
+        {
+            sb.Append("[color=#999999]Déclenchez une explosion pour voir ce que ce bâtiment reçoit.[/color]");
+            return sb.ToString();
+        }
+        sb.Append($"Distance au point zéro : [b]{Format.Distance(r.DistanceM)}[/b]\n\n");
+        if (!r.BlastArrived)
+        {
+            sb.Append($"Onde de choc attendue à T+{Format.Duration(r.Load.ArrivalTimeS)}\n");
+            sb.Append($"Surpression prévue : {Format.Pressure(r.Load.OverpressurePa)}\n");
+            return sb.ToString();
+        }
+        sb.Append("[b]Reçu[/b]\n");
+        sb.Append($"  surpression {Format.Pressure(r.Load.OverpressurePa)}, impulsion {r.Load.ImpulsePaS:N0} Pa·s\n");
+        sb.Append($"  onde arrivée à T+{Format.Duration(r.Load.ArrivalTimeS)}\n");
+        if (r.Load.ThermalCalPerCm2 > 0.1) sb.Append($"  rayonnement thermique {r.Load.ThermalCalPerCm2:0.#} cal/cm²{(r.Burning ? " — [color=#ff8040]en feu[/color]" : "")}\n");
+        if (r.Load.RadiationRad > 1) sb.Append($"  radiation initiale {r.Load.RadiationRad:N0} rad (en plein air)\n");
+        if (r.FalloutRad > 1) sb.Append($"  retombées cumulées {r.FalloutRad:N0} rad (en plein air)\n");
+        sb.Append($"\n[b]Sort[/b] : {state}\n");
+        sb.Append($"  probabilités : légers {r.Damage.PLight:P0}, modérés {r.Damage.PModerate:P0}, graves {r.Damage.PSevere:P0}, effondrement {r.Damage.PCollapse:P0}\n");
+        sb.Append($"  occupants : [b]{r.Deaths:N0}[/b] morts, [b]{r.Injured:N0}[/b] blessés attendus");
+        return sb.ToString();
     }
 
     private void Detonate()
@@ -349,7 +450,8 @@ public partial class Main : Node3D
         var casualty = _detonation.Thermal is { } th
             ? new CasualtyContext(th.BurnThresholdCalPerCm2(BurnDegree.Third), th.BurnThresholdCalPerCm2(BurnDegree.Second))
             : new CasualtyContext(0, 0);
-        _cityView.Prepare(_profile, _groundZero, _thermalTime, casualty);
+        _cityView.Prepare(_profile, _groundZero, _thermalTime, casualty, _detonation.Crater.RadiusM);
+        _crater.Display(_detonation.Crater, _groundZero);
         _fallout = null;
         if (_detonation.NuclearDevice is { } device)
         {
@@ -372,6 +474,7 @@ public partial class Main : Node3D
     private void ClearExplosion()
     {
         _fx.Deactivate();
+        _crater.Clear();
         _fallout = null;
         _detonation = null;
         _profile = null;
@@ -388,6 +491,7 @@ public partial class Main : Node3D
     public override void _UnhandledKeyInput(InputEvent e)
     {
         if (e is InputEventKey { Pressed: true, Keycode: Key.Space }) _hud.Paused = !_hud.Paused;
+        if (e is InputEventKey { Pressed: true, Keycode: Key.Escape }) Select(-1);
     }
 
     // Banc d'essai (--benchmark=secondes) : temps CPU et GPU par image, une ligne par seconde.
@@ -428,6 +532,7 @@ public partial class Main : Node3D
         if (_benchmarkSeconds > 0) Benchmark(delta);
         if (_warmupFrames > 0) StepShaderWarmup();
         PollCityLoading();
+        UpdateSelection(delta);
         if (_fx.Active && _profile is not null && !_hud.Paused)
         {
             _time += delta * _hud.TimeScale;
@@ -438,6 +543,7 @@ public partial class Main : Node3D
             _fx.Update(_time);
             _lastFxMs = _probe.Elapsed.TotalMilliseconds;
             _fallout?.Update(_time / 3600.0);
+            _crater.Update(_time);
             _hud.SetFlash(_fx.FlashIntensity * 0.9f);
             ShakeCameraWhenFrontPasses();
         }
@@ -474,6 +580,7 @@ public partial class Main : Node3D
             (float)_radii.Overpressure140KPaM, (float)_radii.Overpressure35KPaM,
             (float)_radii.Overpressure7KPaM, (float)_radii.ThirdDegreeBurnsM));
         _groundMat.SetShaderParameter("radiation_radius", (float)_radii.Radiation500RadM);
+        _groundMat.SetShaderParameter("crater_radius", active ? (float)_detonation!.Crater.RadiusM : 0f);
         _groundMat.SetShaderParameter("fallout_on", active && _fallout is not null ? 1f : 0f);
         if (active && _fallout is { } f)
         {
@@ -522,6 +629,9 @@ public partial class Main : Node3D
 
     private static string DescribeRadii(Detonation d, EffectRadii r, FalloutField? fallout)
     {
+        string craterRow = d.Crater.Exists
+            ? $"[color=#a07850]●[/color] Cratère : [b]{Format.Distance(2 * d.Crater.RadiusM)}[/b] de diamètre, {Format.Distance(d.Crater.DepthM)} de profondeur (sol sec)\n"
+            : "";
         string falloutRow = fallout is null
             ? d.NuclearDevice is null ? ""
               : "[color=#999999]● Retombées : aucune — la boule de feu ne touche pas le sol (explosion trop haute). " +
@@ -538,6 +648,6 @@ public partial class Main : Node3D
                Row("#fff070", "7 kPa — vitres, dégâts légers", r.Overpressure7KPaM) +
                Row("#ff5ad0", "Brûlures du 3e degré", r.ThirdDegreeBurnsM) +
                Row("#55ff77", "Radiation initiale 500 rad (1re minute, cercle)", r.Radiation500RadM) +
-               Row("#bbbbbb", "Danger des éclats", r.FragmentHazardM) + falloutRow;
+               Row("#bbbbbb", "Danger des éclats", r.FragmentHazardM) + craterRow + falloutRow;
     }
 }

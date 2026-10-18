@@ -68,6 +68,7 @@ dotnet test        # lance la suite de tests
 | Radiation initiale | Courbes 1 kt neutrons + gammas, augmentation hydrodynamique | Glasstone & Dolan §8.60-8.83 | facteur ~2 |
 | Éclats | Gurney + freinage, critères 79 J et 1/55.7 m² | DoD 6055.09 | ±30 % |
 | Dégâts aux bâtiments | Hyperboles pression-impulsion + fragilité lognormale | Baker et al. 1983 ; HAZUS | **seuils indicatifs** |
+| Cratère | R ≈ R1·W^(1/3.4) (nucléaire), D ≈ 0.8·W^(1/3) (chimique), réduit avec la hauteur | Glasstone & Dolan §6.70 ; Ambrosini et al. 2002 | facteur ~2 |
 | Victimes | Risques indépendants (état du bâtiment, incendie, souffle, brûlures, radiation, éclats), DL50 450 rad | HAZUS-MH ; Glasstone ch. 12 ; calibré sur Oughterson & Warren 1956 | facteur ~1.5 |
 | Retombées | WSEG-10, décroissance t^-1.2, protection des bâtiments | Hanifen 1980 ; FEMA (facteurs de protection) | facteur ~3 |
 
@@ -79,8 +80,9 @@ Le portage du modèle DNA et des courbes de radiation s'appuie sur la bibliothè
 - **WSEG-10** : trois erreurs d'unités du portage Python corrigées (hauteur du nuage avec
   le rendement en Mt, vent en mph dans L0 et α1, coordonnée sous le vent dans α2) ; temps
   d'arrivée réécrit sous forme dimensionnellement cohérente.
-- **Hiroshima** : cas bas de Glasstone pour la radiation, plus proche de DS02 (~10 Gy
-  contre ~4-5 Gy à 1 km) que le cas haut (~24 Gy).
+- **Hiroshima** : radiation initiale recalée sur la dosimétrie DS02 (~4.5 Gy à 1 km) par un
+  facteur 0.45 propre à l'engin (`NuclearDevice.RadiationScale`) ; les courbes génériques de
+  Glasstone donnent ~10 Gy (cas bas) à ~24 Gy (cas haut).
 
 - **Rapport de densité au choc** : forme exacte (1 + μξ)/(μ + ξ) au lieu de l'ajustement
   BLAST.EXE, qui ne tend pas vers 1 pour un choc faible.
@@ -92,7 +94,7 @@ Le portage du modèle DNA et des courbes de radiation s'appuie sur la bibliothè
 - Sol plat et idéal ; pas d'effet d'écran ni de canalisation par les bâtiments.
 - Impulsion nucléaire approchée par une onde de Friedlander (b = 1, ±30 %).
 - Thermobarique traité comme du TNT équivalent (onde plus longue non modélisée).
-- Pas de cratère ; retombées sans relief ni précipitations (« cas moyen » WSEG-10).
+- Retombées sans relief ni précipitations (« cas moyen » WSEG-10) ; cratère en sol sec par défaut.
 - Victimes : pas de prise en charge médicale ni d'évacuation ; la radiation est comptée
   comme mortelle sans soins (DL50 450 rad).
 - Les impulsions seuils I0 des dégâts aux bâtiments sont à calibrer sur des données d'essais.

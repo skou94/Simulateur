@@ -14,7 +14,8 @@ public partial class OrbitCamera : Camera3D
     public float Yaw = 0.7f;
     public float Pitch = 0.42f;
 
-    public event Action<Vector3>? GroundClicked;
+    /// <summary>Clic simple : origine et direction du rayon, et point du sol visé (null au-dessus de l'horizon).</summary>
+    public event Action<Vector3, Vector3, Vector3?>? Clicked;
 
     private const float MinDistance = 40f;
     private const float MaxDistance = 250_000f;
@@ -53,8 +54,8 @@ public partial class OrbitCamera : Camera3D
                 }
                 else
                 {
-                    if (_leftDown && !_dragging && GroundPoint(mb.Position) is { } p)
-                        GroundClicked?.Invoke(p);
+                    if (_leftDown && !_dragging)
+                        Clicked?.Invoke(ProjectRayOrigin(mb.Position), ProjectRayNormal(mb.Position), GroundPoint(mb.Position));
                     _leftDown = false;
                 }
                 break;

@@ -30,11 +30,11 @@ public static class Scenarios
 
     /// <summary>
     /// Hiroshima, 6 août 1945 : Little Boy, arme à canon à uranium, 15 kt à 580 m.
-    /// Cas bas de Glasstone pour la radiation (~10 Gy à 1 km) : environ 2 fois la dosimétrie
-    /// de référence DS02 (~4-5 Gy à 1 km), contre ~5 fois pour le cas haut.
+    /// Radiation : cas bas de Glasstone (~10 Gy à 1 km) ramené à la dosimétrie de référence
+    /// DS02 (~4-5 Gy en plein air à 1 km) par un facteur 0.45 propre à cet engin.
     /// </summary>
     public static Detonation Hiroshima() => Detonation.Nuclear(
-        new NuclearDevice(15.0, NuclearDesign.Fission),
+        new NuclearDevice(15.0, NuclearDesign.Fission, RadiationScale: 0.45),
         heightOfBurstM: 580.0, name: "Hiroshima (Little Boy)");
 
     /// <summary>Nagasaki, 9 août 1945 : Fat Man, implosion au plutonium, 21 kt à 503 m.</summary>

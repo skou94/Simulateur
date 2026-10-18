@@ -31,6 +31,11 @@ découle directement du calcul.
 - **Les retombées radioactives** (modèle WSEG-10) : panache poussé par le vent, dose
   cumulée qui s'étend heure après heure, victimes recalculées selon l'abri qu'offre
   chaque bâtiment. Nulles pour une explosion aérienne, majeures au sol.
+- **Le cratère** des explosions au sol, creusé dans le terrain ; les bâtiments qui s'y
+  trouvaient disparaissent.
+- **La fiche de chaque bâtiment** : un clic sur un bâtiment montre ce qu'il a reçu
+  (surpression, impulsion, chaleur, radiation, retombées), ses probabilités de dégâts,
+  l'état tiré et le sort de ses occupants.
 - **10 scénarios de référence** : grenade M67, bombe Mk 82, MOAB, explosion du port de
   Beyrouth (2020), Hiroshima, Nagasaki, bombe à neutrons, ogive de 1,2 Mt, Tsar Bomba,
   Castle Bravo.
@@ -63,12 +68,16 @@ sont créées par le code au lancement.
    première fois (de 30 s à 2 min, connexion internet nécessaire), puis lue depuis le cache.
 2. Choisir un **scénario**, ou régler soi-même le type d'engin, la puissance et la
    hauteur d'explosion ; régler le vent et le moment (jour ou nuit).
-3. Cliquer sur la ville pour choisir le **point d'impact** (marqueur rouge).
+3. Cliquer sur le sol pour choisir le **point d'impact** (marqueur rouge).
 4. Cliquer sur **DÉTONER**.
 
 Le panneau affiche alors les rayons d'effet (boule de feu, 140 / 35 / 7 kPa, brûlures du
 3ᵉ degré, radiation, retombées), et le coin supérieur gauche suit en direct le front de
 choc, le bilan des dégâts et le nombre de victimes.
+
+Un clic sur un **bâtiment** ouvre sa fiche, avant ou pendant l'explosion (Échap pour la
+fermer) : on y voit pourquoi il s'est effondré, ou pas, et combien de ses occupants sont
+morts ou blessés.
 
 Pour voir les retombées, choisir une explosion **au sol** (hauteur 0, par exemple Castle
 Bravo), dézoomer largement et accélérer le temps (×1 000 et plus) : elles arrivent en
@@ -83,7 +92,8 @@ sans abri : ~450 rad).
 | Tourner autour de la scène | glisser avec le clic gauche |
 | Déplacer la vue | glisser avec le clic droit ou le clic molette |
 | Zoomer | molette |
-| Choisir le point d'impact | clic gauche simple (hors explosion en cours) |
+| Choisir le point d'impact | clic gauche simple sur le sol (hors explosion en cours) |
+| Fiche d'un bâtiment | clic gauche simple sur le bâtiment ; Échap pour fermer |
 | Pause / reprise | Espace |
 
 ### Réglages du panneau
@@ -117,6 +127,7 @@ Godot_v4.7.2-stable_mono_win64.exe --path BlastSim/godot -- --demo --scenario=5 
 | `--city=N` | 1 Paris, 2 Manhattan, 3 Londres, 4 Hiroshima, 5 Beyrouth |
 | `--wind=direction,vitesse` | vent (degrés vers lesquels il souffle, m/s) |
 | `--night` | explosion de nuit |
+| `--select=x,z` | ouvre la fiche du bâtiment situé au point (x, z), en mètres |
 | `--time-scale=x` | vitesse du temps |
 | `--camera=distance,lacet,tangage` | position de la caméra (mètres, radians) |
 | `--benchmark=s` | affiche chaque seconde les images par seconde et les temps CPU/GPU, puis quitte après s secondes |
@@ -146,16 +157,18 @@ Console.WriteLine(effets.Blast.OverpressurePa);  // ≈ 32 600 Pa
 Les modèles viennent de sources de référence : modèle de souffle DNA (BLAST.EXE), loi de
 Kinney-Graham pour le TNT, *The Effects of Nuclear Weapons* de Glasstone & Dolan pour le
 thermique et la radiation, critères DoD pour les éclats, WSEG-10 pour les retombées,
-HAZUS pour les victimes par état de dégât. Les 63 tests automatiques vérifient notamment :
+HAZUS pour les victimes par état de dégât, Glasstone & Dolan et Ambrosini pour les
+cratères. Les 68 tests automatiques vérifient notamment :
 
 | Cas | Calculé | Référence |
 |---|---|---|
 | Hiroshima, rayon à 35 kPa (destruction de la plupart des bâtiments) | 1,53 km | ~1,6–1,8 km |
-| Hiroshima, dose de 500 rad | 1,15 km | ~1,0–1,3 km (dosimétrie DS02) |
+| Hiroshima, radiation initiale à 1 km | 4,5 Gy | ~4–5 Gy (dosimétrie DS02) |
 | Hiroshima, mortalité à 1,5 km / 2 km / 3 km | 53 % / 17 % / ~0 % | ~50–60 % / 20–30 % / quelques % |
 | Ogive de 1,2 Mt, rayon à 35 kPa | 6,5 km | ~6,4 km |
 | Trinity, rayon de la boule de feu à 25 ms | ~138 m | 130 m (analyse de G. I. Taylor) |
 | Grenade M67, rayon de danger des éclats | 16 m | 15 m |
+| Cactus (18 kt sur corail), diamètre du cratère | ~120 m | ~110 m |
 | Castle Bravo, dose sur 48 h à 180 km sous le vent | ~1 200 rad (dans l'axe) | Rongelap : ~190 rad (hors de l'axe) |
 
 Pour lancer les tests :
@@ -168,7 +181,8 @@ dotnet test
 **Limites connues** : sol plat (pas d'effet d'écran des bâtiments) ; bâtiments OSM
 approchés par des rectangles de même surface ; seuils de dégâts aux bâtiments indicatifs ;
 bilan des victimes précis à un facteur ~1,5 ; retombées « cas moyen » (WSEG-10), sans
-relief ni pluie, précises à un facteur ~3. Le détail des modèles, des écarts volontaires
+relief ni pluie, précises à un facteur ~3 ; cratères calculés en sol sec (×2 environ dans
+un sol gorgé d'eau, comme le port de Beyrouth). Le détail des modèles, des écarts volontaires
 et des limites se trouve dans [BlastSim/README.md](BlastSim/README.md).
 
 ## Performances

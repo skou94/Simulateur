@@ -58,6 +58,9 @@ public sealed class Detonation
     public InitialRadiation? Radiation { get; private init; }
     public Fragmentation? Fragments { get; private init; }
 
+    /// <summary>Cratère apparent (rayon nul pour une explosion en altitude).</summary>
+    public Crater Crater { get; private init; } = Crater.None;
+
     /// <summary>Énergie totale libérée, kt.</summary>
     public double YieldKt => NuclearDevice?.YieldKt ?? Charge!.TntEquivalentKt;
 
@@ -74,6 +77,7 @@ public sealed class Detonation
             Fireball = fireball,
             Thermal = new ThermalRadiation(device, fireball, visibilityKm),
             Radiation = new InitialRadiation(device, fireball, ambient),
+            Crater = Crater.ForNuclear(device, fireball),
         };
     }
 
@@ -87,6 +91,7 @@ public sealed class Detonation
         {
             Charge = charge,
             Fragments = fragments ? new Fragmentation(charge, ambient) : null,
+            Crater = Crater.ForConventional(charge, heightOfBurstM),
         };
     }
 

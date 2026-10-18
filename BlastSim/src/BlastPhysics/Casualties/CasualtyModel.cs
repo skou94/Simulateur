@@ -51,16 +51,17 @@ public readonly record struct CasualtyRisk(double Death, double Injury)
 public static class CasualtyModel
 {
     // Densité d'occupation en surface brute (murs, circulations, commerces compris) :
-    // ~50 m² par habitant (≈ 40 m² habitables), ~20 m² par employé de bureau.
+    // ~50 m² par habitant (≈ 40 m² habitables), ~25 m² par poste de travail.
     public const double ResidentialM2PerPerson = 50.0;
-    public const double OfficeM2PerPerson = 20.0;
+    public const double OfficeM2PerPerson = 25.0;
 
     /// <summary>Part des occupants nominaux présents, selon l'usage et le moment.</summary>
     public static double Presence(Occupancy occupancy, TimeOfDay time) => (occupancy, time) switch
     {
         (Occupancy.Residential, TimeOfDay.Day) => 0.45,
         (Occupancy.Residential, TimeOfDay.Night) => 0.95,
-        (Occupancy.Office, TimeOfDay.Day) => 0.8,
+        // Taux de présence observé dans les bureaux un jour ordinaire : ~60-70 %.
+        (Occupancy.Office, TimeOfDay.Day) => 0.65,
         _ => 0.05,
     };
 

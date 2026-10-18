@@ -57,7 +57,8 @@ public sealed class InitialRadiation
         double secondary = Math.Pow(10, gammaCurve.Evaluate(yd)) * y * heightFactor;
         double fission = Math.Pow(10, RadiationTables.FissionFragmentGamma.Evaluate(yd))
                          * EffectiveYieldKt(y, yd) * _device.FissionFraction;
-        return new Dose(neutron, secondary, fission);
+        double k = _device.RadiationScale;
+        return new Dose(neutron * k, secondary * k, fission * k);
     }
 
     public double TotalRadAtGroundRange(double groundRangeM) => AtGroundRange(groundRangeM).TotalRad;

@@ -20,6 +20,7 @@ uniform float front_radius = 0.0;    // position du front de choc
 uniform float front_strength = 0.0;
 uniform float glow_radius = 0.0;     // incandescence sous la boule de feu
 uniform float glow_amount = 0.0;
+uniform float crater_radius = 0.0;
 
 // Retombées : dose cumulée (rad) sur une grille dans le repère du vent.
 uniform float fallout_on = 0.0;
@@ -54,6 +55,8 @@ float ring(float d, float r) {
 
 void fragment() {
 	vec2 p = world_pos.xz;
+	// Le sol est percé dans le cratère, dont le maillage prend le relais.
+	if (crater_radius > 0.0 && distance(p, ground_zero) < crater_radius) discard;
 	float n = fbm2(p * 0.004) * 0.6 + fbm2(p * 0.05) * 0.4;
 
 	// Campagne : champs en damier légèrement teintés.

@@ -13,6 +13,13 @@ public readonly record struct DamageTally(
     int Total, int Hit, int Light, int Moderate, int Severe, int Collapsed, int Burning,
     double Population, double Deaths, double Injured);
 
+/// <summary>Tout ce qu'on sait d'un bâtiment à l'instant présent, pour la fiche affichée au clic.</summary>
+public readonly record struct BuildingReport(
+    int Index, StructureType Structure, Occupancy Use, float OriginalHeightM, int Floors, float FootprintM2,
+    double Occupants, bool Active, double DistanceM, bool BlastArrived, RadialProfile.Sample Load,
+    DamageAssessment Damage, DamageState State, bool Vaporized, bool Burning, double FalloutRad,
+    double Deaths, double Injured);
+
 /// <summary>Paramètres de l'estimation des victimes pour une détonation.</summary>
 public readonly record struct CasualtyContext(double ThirdDegreeCalPerCm2, double SecondDegreeCalPerCm2);
 
@@ -55,6 +62,7 @@ public partial class CityView : MultiMeshInstance3D
         public double FireStart;
         public float Fire, Char, Broken;
         public float FalloutRad;
+        public bool Vaporized;
     }
 
     private CityModel _city = null!;
@@ -76,6 +84,7 @@ public partial class CityView : MultiMeshInstance3D
     private double[] _deaths = Array.Empty<double>(), _injured = Array.Empty<double>();
     private double _population, _deathTotal, _injuredTotal;
     private CasualtyContext _casualty;
+    private float _craterRadius;
 
     // Retombées : débit H+1 et arrivée par bâtiment ; dose réévaluée par tranches.
     private float[] _falloutRate = Array.Empty<float>(), _falloutArrival = Array.Empty<float>();
@@ -154,9 +163,11 @@ public partial class CityView : MultiMeshInstance3D
     }
 
     /// <summary>Prépare l'impact : charge de chaque bâtiment selon sa distance au point zéro.</summary>
-    public void Prepare(RadialProfile profile, Vector2 groundZero, double thermalTimeS, CasualtyContext casualty)
+    public void Prepare(RadialProfile profile, Vector2 groundZero, double thermalTimeS, CasualtyContext casualty,
+                        double craterRadiusM = 0)
     {
         ResetDamage();
+        _craterRadius = (float)craterRadiusM;
         _profile = profile;
         _casualty = casualty;
         _thermalTimeS = thermalTimeS;
@@ -329,6 +340,20 @@ public partial class CityView : MultiMeshInstance3D
             DamageState.Moderate => (0.96f, 0.5f + 1.5f * r),
             _ => (1f, 0f),
         };
+        // Dans le cratère, le bâtiment est pulvérisé et emporté avec les déblais.
+        bool inCrater = s.Distance < _craterRadius;
+        if (inCrater)
+        {
+            if (s.Damage != DamageState.Collapse)
+            {
+                if (s.Damage > DamageState.None) DecrementState(s.Damage);
+                s.Damage = DamageState.Collapse;
+                _collapsed++;
+            }
+            heightFactor = 0.0f;
+            tiltDeg = 0f;
+            s.Vaporized = true;
+        }
         if (s.Damage >= DamageState.Moderate)
         {
             s.StartHeight = s.CurrentHeight;
@@ -353,7 +378,9 @@ public partial class CityView : MultiMeshInstance3D
         var exposure = new Exposure(s.Load.OverpressurePa, s.Load.ImpulsePaS, s.Load.ThermalCalPerCm2,
                                     _casualty.ThirdDegreeCalPerCm2, _casualty.SecondDegreeCalPerCm2,
                                     s.Load.RadiationRad, s.FalloutRad, s.Load.FragmentHitProbability);
-        var risk = CasualtyModel.Occupant(b.Structure, s.Damage, s.Burning, exposure, TimeOfDay);
+        var risk = s.Distance < _craterRadius
+            ? new CasualtyRisk(1.0, 0.0)
+            : CasualtyModel.Occupant(b.Structure, s.Damage, s.Burning, exposure, TimeOfDay);
         double deaths = _occupants[i] * risk.Death, injured = _occupants[i] * risk.Injury;
         _deathTotal += deaths - _deaths[i];
         _injuredTotal += injured - _injured[i];
@@ -368,6 +395,15 @@ public partial class CityView : MultiMeshInstance3D
     {
         var b = _city.Buildings[i];
         ref var s = ref _state[i];
+        int o = i * Stride;
+        var f = _buffer;
+        if (s.Vaporized)
+        {
+            // Matrice nulle : l'instance n'est plus dessinée.
+            Array.Clear(f, o, 12);
+            _dirty = true;
+            return;
+        }
         float w = b.Width, h = MathF.Max(s.CurrentHeight, 0.3f), d = b.Depth;
         float cy = _cosYaw[i], sy = _sinYaw[i];
         float ax = _tiltAxisX[i], az = _tiltAxisZ[i];
@@ -385,8 +421,6 @@ public partial class CityView : MultiMeshInstance3D
         float m02 = r00 * qx + r02 * qz, m12 = r10 * qx + r12 * qz, m22 = r20 * qx + r22 * qz;
 
         // Le pied de la boîte unitaire (y = −0.5) reste posé au sol.
-        int o = i * Stride;
-        var f = _buffer;
         f[o] = m00; f[o + 1] = m01; f[o + 2] = m02; f[o + 3] = b.X + 0.5f * m01;
         f[o + 4] = m10; f[o + 5] = m11; f[o + 6] = m12; f[o + 7] = 0.5f * m11;
         f[o + 8] = m20; f[o + 9] = m21; f[o + 10] = m22; f[o + 11] = b.Z + 0.5f * m21;
@@ -402,6 +436,76 @@ public partial class CityView : MultiMeshInstance3D
         _buffer[o + 2] = s.Broken;
         _buffer[o + 3] = _city.Buildings[i].Seed;
         _dirty = true;
+    }
+
+    /// <summary>
+    /// Bâtiment touché en premier par le rayon (−1 si aucun). Test rayon-boîte dans le repère
+    /// de chaque bâtiment (méthode des dalles), à sa hauteur actuelle ; ~2 ms pour 40 000 boîtes.
+    /// </summary>
+    public int Pick(Vector3 origin, Vector3 direction)
+    {
+        int best = -1;
+        float bestT = float.MaxValue;
+        for (int i = 0; i < _state.Length; i++)
+        {
+            ref var s = ref _state[i];
+            if (s.Vaporized) continue;
+            var b = _city.Buildings[i];
+            float h = MathF.Max(s.CurrentHeight, 0.3f);
+            float cy = _cosYaw[i], sy = _sinYaw[i];
+            float ox = origin.X - b.X, oy = origin.Y - 0.5f * h, oz = origin.Z - b.Z;
+            // Axes locaux : largeur (cy, 0, −sy), profondeur (sy, 0, cy).
+            float lox = ox * cy - oz * sy, loz = ox * sy + oz * cy;
+            float ldx = direction.X * cy - direction.Z * sy, ldz = direction.X * sy + direction.Z * cy;
+            float tMin = 0f, tMax = bestT;
+            if (!Slab(lox, ldx, 0.5f * b.Width, ref tMin, ref tMax)) continue;
+            if (!Slab(oy, direction.Y, 0.5f * h, ref tMin, ref tMax)) continue;
+            if (!Slab(loz, ldz, 0.5f * b.Depth, ref tMin, ref tMax)) continue;
+            bestT = tMin;
+            best = i;
+        }
+        return best;
+    }
+
+    private static bool Slab(float o, float d, float half, ref float tMin, ref float tMax)
+    {
+        if (MathF.Abs(d) < 1e-9f) return MathF.Abs(o) <= half;
+        float t1 = (-half - o) / d, t2 = (half - o) / d;
+        if (t1 > t2) (t1, t2) = (t2, t1);
+        tMin = MathF.Max(tMin, t1);
+        tMax = MathF.Min(tMax, t2);
+        return tMin <= tMax;
+    }
+
+    /// <summary>Transformation actuelle de l'instance (lue dans le tampon envoyé au GPU).</summary>
+    public Transform3D InstanceTransform(int i)
+    {
+        int o = i * Stride;
+        var f = _buffer;
+        var basis = new Basis(new Vector3(f[o], f[o + 4], f[o + 8]), new Vector3(f[o + 1], f[o + 5], f[o + 9]),
+                              new Vector3(f[o + 2], f[o + 6], f[o + 10]));
+        return new Transform3D(basis, new Vector3(f[o + 3], f[o + 7], f[o + 11]));
+    }
+
+    public BuildingReport Report(int i)
+    {
+        ref var s = ref _state[i];
+        var b = _city.Buildings[i];
+        var damage = _profile is null ? default : BuildingDamage.Assess(b.Structure, s.Load.OverpressurePa, s.Load.ImpulsePaS);
+        return new BuildingReport(
+            i, b.Structure, b.Use, b.Height, (int)MathF.Max(1f, MathF.Round(b.Height / 3.2f)), b.Width * b.Depth,
+            _occupants[i], _profile is not null, s.Distance, s.BlastResolved, s.Load, damage, s.Damage,
+            s.Vaporized, s.Burning, s.FalloutRad, _deaths[i], _injured[i]);
+    }
+
+    private void DecrementState(DamageState state)
+    {
+        switch (state)
+        {
+            case DamageState.Light: _light--; break;
+            case DamageState.Moderate: _moderate--; break;
+            case DamageState.Severe: _severe--; break;
+        }
     }
 
     // Aléa déterministe par bâtiment (reproductible d'une détonation à l'autre).

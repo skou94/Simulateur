@@ -36,9 +36,9 @@ public class HistoricalValidationTests
     [Fact]
     public void Hiroshima_InitialRadiation500RadRadius()
     {
-        // Dose DL50 (~450-500 rad) à ~1.2-1.4 km (réévaluation dosimétrique DS02).
+        // DS02 : ~4-5 Gy en plein air à 1 km, donc 500 rad vers 0.9-1.0 km.
         var r = Scenarios.Hiroshima().ComputeRadii();
-        Assert.InRange(r.Radiation500RadM, 1000, 1600);
+        Assert.InRange(r.Radiation500RadM, 850, 1100);
     }
 
     [Fact]
