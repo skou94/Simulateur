@@ -475,6 +475,7 @@ public partial class Main : Node3D
         Mark("Retombées");
         Mark("CityView.Prepare");
         _fx.Position = new Vector3(_groundZero.X, 0f, _groundZero.Y);
+        PushCloudLighting();
         _fx.Setup(_detonation, _profile, _radii);
         Mark("ExplosionView.Setup");
         _time = 0.0;
@@ -492,6 +493,8 @@ public partial class Main : Node3D
         _detonation = null;
         _profile = null;
         _hud.SetFlash(0f);
+        _environment.TonemapExposure = 1f;
+        _environment.GlowIntensity = 0.9f;
     }
 
     private void ResetScene()
@@ -562,7 +565,7 @@ public partial class Main : Node3D
             _lastFxMs = _probe.Elapsed.TotalMilliseconds;
             _fallout?.Update(_time / 3600.0);
             _crater.Update(_time);
-            _hud.SetFlash(_fx.FlashIntensity * 0.9f);
+            UpdateFlash();
             ShakeCameraWhenFrontPasses();
         }
         UpdateGroundUniforms();
@@ -570,6 +573,31 @@ public partial class Main : Node3D
         // Brouillard réglé pour la ville ; on l'atténue en vue lointaine (retombées sur des centaines de km).
         _environment.FogDensity = 2e-5f * Mathf.Clamp(8000f / _camera.Distance, 0.03f, 1f);
         _hud.SetLive(DescribeLive());
+    }
+
+    // Éblouissement : la puissance lumineuse vue par la caméra décroît avec la distance
+    // (échelle : 40 rayons de boule de feu) et dépend de la direction du regard ; il se
+    // traduit par une surexposition brève (image qui « brûle » puis se réadapte), un halo
+    // renforcé et, face à l'explosion de près, un voile blanc.
+    // Le nuage volumétrique calcule lui-même son éclairage : on lui transmet celui de la scène.
+    private void PushCloudLighting()
+    {
+        bool night = _cityView.TimeOfDay == TimeOfDay.Night;
+        _fx.SetLighting(_sun.GlobalTransform.Basis.Z.Normalized(), _sun.LightColor, _sun.LightEnergy,
+                        night ? new Color(0.05f, 0.06f, 0.10f) : new Color(0.45f, 0.52f, 0.62f));
+    }
+
+    private void UpdateFlash()
+    {
+        var toFireball = _fx.FireballCenter - _camera.GlobalPosition;
+        float distance = Mathf.Max(toFireball.Length(), 1f);
+        float near = 1f / (1f + Mathf.Pow(distance / (40f * _fx.FireballScaleM), 2f));
+        var forward = -_camera.GlobalTransform.Basis.Z;
+        float facing = Mathf.Clamp((forward.Dot(toFireball / distance) - 0.2f) / 0.6f, 0f, 1f);
+        float seen = _fx.FlashPower * near * (0.35f + 0.65f * facing);
+        _environment.TonemapExposure = 1f + 5f * seen;
+        _environment.GlowIntensity = 0.9f + 2.5f * seen;
+        _hud.SetFlash(Mathf.Clamp(seen * seen * 1.2f, 0f, 0.85f));
     }
 
     private void ShakeCameraWhenFrontPasses()

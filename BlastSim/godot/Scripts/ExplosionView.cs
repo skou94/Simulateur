@@ -1,6 +1,6 @@
 using System;
-using System.Collections.Generic;
 using BlastPhysics;
+using BlastPhysics.Blast;
 using BlastPhysics.Nuclear;
 using Godot;
 
@@ -10,9 +10,10 @@ namespace BlastSimGame;
 /// Effets visuels d'une explosion, chacun lié à une grandeur physique :
 /// <list type="bullet">
 /// <item>flash : puissance thermique normalisée (courbe de Glasstone) ;</item>
-/// <item>boule de feu : rayon de Taylor-Sedov puis rayon maximal, montée du nuage ;</item>
-/// <item>mur de poussière : position du front de choc et surpression au front ;</item>
-/// <item>champignon : modèle de montée et de taille du nuage.</item>
+/// <item>boule de feu : rayon de Taylor-Sedov puis rayon maximal, refroidissement ;</item>
+/// <item>nuage de Wilson : coquille de condensation qui suit le front de choc en air libre ;</item>
+/// <item>champignon volumétrique : modèle de montée et de taille du nuage ;</item>
+/// <item>mur de poussière : position du front de choc au sol et surpression au front.</item>
 /// </list>
 /// </summary>
 public partial class ExplosionView : Node3D
@@ -27,17 +28,24 @@ public partial class ExplosionView : Node3D
     private OmniLight3D _flashLight = null!;
     private MeshInstance3D _dustWall = null!;
     private ShaderMaterial _dustMat = null!;
-    private ShaderMaterial _capMat = null!, _stemMat = null!;
-    private readonly List<(MeshInstance3D Mesh, Vector3 Offset, float Scale)> _capPuffs = new();
-    private readonly List<(MeshInstance3D Mesh, float T, float Scale, Vector2 Jitter)> _stemPuffs = new();
+    private MeshInstance3D _cloudBox = null!;
+    private ShaderMaterial _cloudMat = null!;
+    private MeshInstance3D _wilson = null!;
+    private ShaderMaterial _wilsonMat = null!;
 
     // Explosion conventionnelle : boule de feu R ≈ 1.5·W^(1/3) m (W en kg de TNT), durée
     // ≈ 0.25·W^(1/6) s. Ordres de grandeur visuels (≈140 m et ≈2.4 s pour Beyrouth).
     private double _conventionalRadiusM, _conventionalDurationS;
+    private float _cloudAge = 1f;
 
+    /// <summary>Puissance lumineuse normalisée de l'explosion (0..1).</summary>
+    public float FlashPower { get; private set; }
 
-    /// <summary>Intensité courante du flash vu de loin (0..1), pour l'écran blanc.</summary>
-    public float FlashIntensity { get; private set; }
+    /// <summary>Centre de la boule de feu dans le repère du monde.</summary>
+    public Vector3 FireballCenter => GlobalPosition + _fireballMesh.Position;
+
+    /// <summary>Rayon maximal de la boule de feu : échelle de distance de l'éblouissement.</summary>
+    public float FireballScaleM { get; private set; } = 1f;
 
     /// <summary>Rayon et intensité du front de choc, pour le shader du sol.</summary>
     public float FrontRadius { get; private set; }
@@ -45,8 +53,7 @@ public partial class ExplosionView : Node3D
     public float GroundGlow { get; private set; }
     public float GroundGlowRadius { get; private set; }
 
-    // Les nœuds sont créés une seule fois puis reconfigurés à chaque détonation :
-    // reconstruire ~70 maillages et matériaux coûtait ~50 ms au déclenchement.
+    // Les nœuds sont créés une seule fois puis reconfigurés à chaque détonation.
     public override void _Ready()
     {
         _fireballMat = new ShaderMaterial { Shader = GD.Load<Shader>("res://Shaders/fireball.gdshader") };
@@ -66,6 +73,25 @@ public partial class ExplosionView : Node3D
         };
         AddChild(_flashLight);
 
+        _cloudMat = new ShaderMaterial { Shader = GD.Load<Shader>("res://Shaders/cloud.gdshader") };
+        _cloudBox = new MeshInstance3D
+        {
+            Mesh = new BoxMesh { Size = Vector3.One },
+            MaterialOverride = _cloudMat,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+        };
+        AddChild(_cloudBox);
+
+        _wilsonMat = new ShaderMaterial { Shader = GD.Load<Shader>("res://Shaders/wilson.gdshader") };
+        _wilson = new MeshInstance3D
+        {
+            Mesh = new SphereMesh { Radius = 1f, Height = 2f, RadialSegments = 96, Rings = 48 },
+            MaterialOverride = _wilsonMat,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Visible = false,
+        };
+        AddChild(_wilson);
+
         _dustMat = new ShaderMaterial { Shader = GD.Load<Shader>("res://Shaders/dust_wall.gdshader") };
         _dustWall = new MeshInstance3D
         {
@@ -80,8 +106,16 @@ public partial class ExplosionView : Node3D
         };
         AddChild(_dustWall);
 
-        BuildCloud();
         Deactivate();
+    }
+
+    /// <summary>Éclairage de la scène, pour que le nuage volumétrique soit éclairé comme le reste.</summary>
+    public void SetLighting(Vector3 towardSun, Color sunColor, float sunEnergy, Color ambient)
+    {
+        _cloudMat.SetShaderParameter("sun_dir", towardSun);
+        _cloudMat.SetShaderParameter("sun_color", sunColor);
+        _cloudMat.SetShaderParameter("sun_energy", sunEnergy);
+        _cloudMat.SetShaderParameter("ambient_color", ambient);
     }
 
     public void Setup(Detonation detonation, RadialProfile profile, EffectRadii radii)
@@ -91,17 +125,23 @@ public partial class ExplosionView : Node3D
         _fireball = detonation.Fireball;
         _cloud = null;
         if (detonation.NuclearDevice is { } device)
+        {
             _cloud = new MushroomCloud(device, detonation.HeightOfBurstM);
+            FireballScaleM = (float)_fireball!.MaxRadiusM;
+            _cloudMat.SetShaderParameter("smoke_color", new Color(0.66f, 0.62f, 0.58f));
+            _cloudMat.SetShaderParameter("dust_color", new Color(0.50f, 0.42f, 0.34f));
+        }
         else
         {
             double w = detonation.Charge!.TntEquivalentKg;
             _conventionalRadiusM = 1.5 * Math.Cbrt(w);
             _conventionalDurationS = 0.25 * Math.Pow(w, 1.0 / 6.0);
+            FireballScaleM = (float)_conventionalRadiusM;
+            _cloudMat.SetShaderParameter("smoke_color", new Color(0.20f, 0.19f, 0.18f));
+            _cloudMat.SetShaderParameter("dust_color", new Color(0.32f, 0.28f, 0.24f));
         }
         _fireballMat.SetShaderParameter("seed", (float)GD.RandRange(0.0, 100.0));
-        _capMat.SetShaderParameter("smoke_color", _cloud is null ? new Color(0.22f, 0.20f, 0.19f) : new Color(0.66f, 0.63f, 0.60f));
         _flashLight.OmniRange = (float)Math.Clamp(radii.Overpressure7KPaM * 3.0, 300.0, 200_000.0);
-        foreach (var puff in _stemPuffs) puff.Mesh.Visible = false;
         Active = true;
         Visible = true;
         Update(0.0);
@@ -116,60 +156,7 @@ public partial class ExplosionView : Node3D
     {
         Active = false;
         Visible = false;
-        FlashIntensity = FrontRadius = FrontStrength = GroundGlow = GroundGlowRadius = 0f;
-    }
-
-    private void BuildCloud()
-    {
-        var shader = GD.Load<Shader>("res://Shaders/smoke.gdshader");
-        _capMat = new ShaderMaterial { Shader = shader };
-        _capMat.SetShaderParameter("smoke_color", new Color(0.66f, 0.63f, 0.60f));
-        _stemMat = new ShaderMaterial { Shader = shader };
-        _stemMat.SetShaderParameter("smoke_color", new Color(0.58f, 0.53f, 0.46f));
-        var sphere = new SphereMesh { Radius = 1f, Height = 2f, RadialSegments = 32, Rings = 16 };
-        var rng = new RandomNumberGenerator { Seed = 1234 };
-
-        // Chapeau : tore de bouffées autour d'un dôme (circulation toroïdale).
-        const int ring = 16;
-        for (int k = 0; k < ring; k++)
-        {
-            float a = Mathf.Tau * k / ring + rng.RandfRange(-0.1f, 0.1f);
-            var offset = new Vector3(Mathf.Cos(a) * 0.62f, rng.RandfRange(-0.12f, 0.08f), Mathf.Sin(a) * 0.62f);
-            AddPuff(_capPuffs, sphere, _capMat, offset, rng.RandfRange(0.42f, 0.55f), rng);
-        }
-        for (int k = 0; k < 7; k++)
-        {
-            float a = Mathf.Tau * k / 7f;
-            var offset = new Vector3(Mathf.Cos(a) * 0.28f, rng.RandfRange(0.12f, 0.3f), Mathf.Sin(a) * 0.28f);
-            AddPuff(_capPuffs, sphere, _capMat, offset, rng.RandfRange(0.45f, 0.6f), rng);
-        }
-
-        // Tige, puis jupe de poussière au pied (nucléaire seulement).
-        const int stem = 34;
-        for (int k = 0; k < stem; k++)
-        {
-            var mesh = NewPuff(sphere, _stemMat, rng);
-            var jitter = new Vector2(rng.RandfRange(-0.35f, 0.35f), rng.RandfRange(-0.35f, 0.35f));
-            _stemPuffs.Add((mesh, k / (float)(stem - 1), rng.RandfRange(0.8f, 1.2f), jitter));
-        }
-    }
-
-    private void AddPuff(List<(MeshInstance3D, Vector3, float)> list, Mesh mesh, ShaderMaterial mat,
-                         Vector3 offset, float scale, RandomNumberGenerator rng)
-        => list.Add((NewPuff(mesh, mat, rng), offset, scale));
-
-    private MeshInstance3D NewPuff(Mesh mesh, ShaderMaterial mat, RandomNumberGenerator rng)
-    {
-        var m = new MeshInstance3D
-        {
-            Mesh = mesh,
-            MaterialOverride = mat,
-            CastShadow = GeometryInstance3D.ShadowCastingSetting.On,
-            Visible = false,
-        };
-        m.SetInstanceShaderParameter("seed", rng.RandfRange(0f, 50f));
-        AddChild(m);
-        return m;
+        FlashPower = FrontRadius = FrontStrength = GroundGlow = GroundGlowRadius = 0f;
     }
 
     public void Update(double t)
@@ -185,7 +172,7 @@ public partial class ExplosionView : Node3D
         var cloud = _cloud!;
         double tMax = fb.ThermalPulseMaxTimeS;
         float power = (float)fb.ThermalPowerFraction(t);
-        // Refroidissement : blanc pendant l'impulsion thermique, rouge sombre après ~40 t_max.
+        // Refroidissement : blanc pendant l'impulsion thermique, rouge sombre ensuite.
         float heat = (float)Math.Exp(-t / (12.0 * tMax));
 
         double progress = cloud.Progress(t);
@@ -198,48 +185,59 @@ public partial class ExplosionView : Node3D
         _fireballMesh.Position = new Vector3(0f, (float)centerY, 0f);
         _fireballMesh.Scale = Vector3.One * (float)Math.Max(radius, 0.01);
         _fireballMat.SetShaderParameter("heat", heat);
-        float fireballOpacity = Mathf.Clamp(heat * 6f, 0f, 1f);
+        // La boule de feu s'efface pendant que le nuage, encore incandescent, prend sa place.
+        float fireballOpacity = (float)Smooth(0.15, 0.45, heat);
         _fireballMat.SetShaderParameter("opacity", fireballOpacity);
         _fireballMesh.Visible = fireballOpacity > 0.01f;
 
         _flashLight.Position = _fireballMesh.Position;
         _flashLight.LightEnergy = 40f * power + 6f * heat;
         _flashLight.Visible = _flashLight.LightEnergy > 0.02f;
-        FlashIntensity = Mathf.Clamp(power * 1.2f, 0f, 1f);
+        FlashPower = Mathf.Clamp(power, 0f, 1f);
 
-        // Chapeau : grossit en montant ; fumée de plus en plus opaque quand la boule refroidit.
-        double capRadius = fb.MaxRadiusM + (cloud.StabilizedCapRadiusM - fb.MaxRadiusM) * progress;
-        float capDensity = Mathf.Clamp((1f - heat) * 1.6f, 0f, 1f) * Mathf.Clamp((float)progress * 30f, 0f, 1f);
-        _capMat.SetShaderParameter("density", capDensity);
-        // Lueur interne : intense tant que la boule de feu est chaude, quelques braises ensuite.
-        _capMat.SetShaderParameter("glow", Mathf.Clamp(heat * 2f, 0f, 1f) + 0.06f * (float)Math.Exp(-t / 8.0));
-        var center = new Vector3(0f, (float)centerY, 0f);
-        foreach (var (mesh, offset, scale) in _capPuffs)
-        {
-            mesh.Visible = capDensity > 0.01f;
-            var squash = new Vector3(1f, 0.55f, 1f);
-            mesh.Position = center + offset * (float)capRadius * squash;
-            mesh.Scale = Vector3.One * (float)(capRadius * scale);
-        }
+        // Champignon : le chapeau prend le relais de la boule de feu qui refroidit et grossit
+        // en montant ; le tore se creuse et roule ; la tige et la jupe de poussière montent du sol.
+        double capR = fb.MaxRadiusM + (cloud.StabilizedCapRadiusM - fb.MaxRadiusM) * progress;
+        float density = Mathf.Clamp((1f - heat) * 1.5f, 0f, 1f);
+        float ringRatio = Mathf.Lerp(0.3f, 0.55f, Mathf.Clamp((float)progress * 4f, 0f, 1f));
+        double stemTopFull = centerY - 0.45 * capR;
+        double stemGrowth = Math.Clamp(progress * 8.0 - 0.05, 0.0, 1.0);
+        double stemTop = stemTopFull * stemGrowth;
+        double stemR = stemGrowth > 0 ? 0.13 * capR : 0.0;
+        // Jupe : forte pour une explosion au sol, discrète en altitude.
+        double contact = fb.TouchesGround ? 1.0 : Math.Clamp(1.0 - fb.HeightOfBurstM / (4.0 * fb.MaxRadiusM), 0.06, 1.0);
+        double skirtR = capR * 0.75 * contact * Math.Clamp(progress * 10.0, 0.0, 1.0);
+        float cloudHeat = (float)Math.Exp(-t / (40.0 * tMax));
+        _cloudAge = Mathf.Clamp((float)progress * 3f, 0f, 1f);
+        ConfigureCloud(centerY, capR, ringRatio, stemR, stemTop, skirtR, density, cloudHeat,
+                       roll: t / (0.4 * cloud.RiseTimeConstantS) * Mathf.Tau, rise: t * centerY / cloud.RiseTimeConstantS);
 
-        // Tige : aspirée sous le chapeau une fois le front réfléchi par le sol.
-        float stemDensity = Mathf.Clamp((float)(progress - 0.015) * 12f, 0f, 0.95f);
-        _stemMat.SetShaderParameter("density", stemDensity);
-        _stemMat.SetShaderParameter("glow", 0f);
-        double stemTop = centerY - capRadius * 0.35;
-        foreach (var (mesh, s, scale, jitter) in _stemPuffs)
-        {
-            mesh.Visible = stemDensity > 0.01f && stemTop > 0;
-            double y = s * stemTop;
-            // Évasée au pied (poussière soulevée), fine au milieu, élargie sous le chapeau.
-            double width = capRadius * (0.12 + 0.35 * Math.Pow(1.0 - s, 6) + 0.12 * Math.Pow(s, 4));
-            var lateral = jitter * (float)width;
-            mesh.Position = new Vector3(lateral.X, (float)y, lateral.Y);
-            mesh.Scale = new Vector3((float)width, (float)Math.Max(stemTop / 7.0, width * 0.8), (float)width) * scale;
-        }
+        UpdateWilson(t, fb);
 
         GroundGlow = (float)Math.Clamp(heat * 3.0, 0.0, 1.0);
         GroundGlowRadius = (float)(fb.MaxRadiusM * 1.6);
+    }
+
+    // Nuage de Wilson : coquille de condensation au rayon du front de choc en air libre,
+    // visible pendant que le front s'éloigne de 1.2 à ~4 rayons de boule de feu.
+    private void UpdateWilson(double t, Fireball fb)
+    {
+        double cbrtW = Math.Cbrt(_det.NuclearDevice!.BlastEquivalentKt);
+        double lo = 1.0, hi = 1e5;
+        for (int k = 0; k < 40; k++)
+        {
+            double mid = Math.Sqrt(lo * hi);
+            if (NuclearFreeAirCurve.Instance.ArrivalTime(mid) * cbrtW < t) lo = mid; else hi = mid;
+        }
+        double shell = lo * cbrtW;
+        double R = fb.MaxRadiusM;
+        double strength = 0.95 * Smooth(1.2 * R, 1.7 * R, shell) * (1.0 - Smooth(3.0 * R, 5.0 * R, shell));
+        _wilson.Visible = strength > 0.01;
+        if (!_wilson.Visible) return;
+        _wilson.Position = new Vector3(0f, (float)fb.HeightOfBurstM, 0f);
+        _wilson.Scale = Vector3.One * (float)shell;
+        _wilsonMat.SetShaderParameter("strength", (float)strength);
+        _wilsonMat.SetShaderParameter("ground_y", (float)(-fb.HeightOfBurstM / shell));
     }
 
     private void UpdateConventional(double t)
@@ -261,23 +259,43 @@ public partial class ExplosionView : Node3D
         _flashLight.Position = _fireballMesh.Position;
         _flashLight.LightEnergy = 25f * heat;
         _flashLight.Visible = heat > 0.01f;
-        FlashIntensity = Mathf.Clamp(heat * 0.6f, 0f, 1f) * (float)Math.Exp(-t / (0.08 * tau));
+        FlashPower = Mathf.Clamp(heat * 0.6f, 0f, 1f) * (float)Math.Exp(-t / (0.08 * tau));
 
-        // Panache de fumée noire qui prend le relais.
+        // Panache de fumée noire qui prend le relais de la boule de feu.
         float smoke = Mathf.Clamp((float)(t / tau) * 1.5f, 0f, 1f) * (float)Math.Exp(-t / (60.0 * tau));
-        _capMat.SetShaderParameter("density", smoke);
-        _capMat.SetShaderParameter("glow", heat);
         double plume = _conventionalRadiusM * (1.2 + 1.5 * grow + t / tau * 0.3);
-        var center = new Vector3(0f, (float)centerY, 0f);
-        foreach (var (mesh, offset, scale) in _capPuffs)
-        {
-            mesh.Visible = smoke > 0.01f;
-            mesh.Position = center + offset * (float)plume * 0.8f;
-            mesh.Scale = Vector3.One * (float)(plume * scale * 0.8);
-        }
+        ConfigureCloud(centerY, plume, ringRatio: 0.25f, stemR: 0.0, stemTop: 0.0, skirtR: 0.0,
+                       density: smoke, heat: heat, roll: t / (8.0 * tau), rise: 0.0);
+        _wilson.Visible = false;
 
         GroundGlow = heat;
         GroundGlowRadius = (float)(_conventionalRadiusM * 1.3);
+    }
+
+    private void ConfigureCloud(double capY, double capR, float ringRatio, double stemR, double stemTop, double skirtR,
+                                float density, float heat, double roll, double rise)
+    {
+        _cloudBox.Visible = density > 0.002f;
+        if (!_cloudBox.Visible) return;
+        float half = (float)(Math.Max(capR, skirtR) * 1.3);
+        float top = (float)(capY + capR * 1.15);
+        var ground = GlobalPosition;
+        _cloudBox.Position = new Vector3(0f, top / 2f, 0f);
+        _cloudBox.Scale = new Vector3(2f * half, top, 2f * half);
+        _cloudMat.SetShaderParameter("box_min", ground + new Vector3(-half, 0f, -half));
+        _cloudMat.SetShaderParameter("box_max", ground + new Vector3(half, top, half));
+        _cloudMat.SetShaderParameter("ground_center", ground);
+        _cloudMat.SetShaderParameter("cap_y", (float)capY);
+        _cloudMat.SetShaderParameter("cap_r", (float)capR);
+        _cloudMat.SetShaderParameter("ring_ratio", ringRatio);
+        _cloudMat.SetShaderParameter("stem_r", (float)stemR);
+        _cloudMat.SetShaderParameter("stem_top", (float)stemTop);
+        _cloudMat.SetShaderParameter("skirt_r", (float)skirtR);
+        _cloudMat.SetShaderParameter("density", density);
+        _cloudMat.SetShaderParameter("heat", heat);
+        _cloudMat.SetShaderParameter("roll", (float)roll);
+        _cloudMat.SetShaderParameter("rise", (float)rise);
+        _cloudMat.SetShaderParameter("age", _cloudAge);
     }
 
     private void UpdateShockFront(double t)
@@ -295,5 +313,11 @@ public partial class ExplosionView : Node3D
         _dustWall.Position = new Vector3(0f, height / 2f, 0f);
         _dustWall.Scale = new Vector3((float)r, height, (float)r);
         _dustMat.SetShaderParameter("strength", strength);
+    }
+
+    private static double Smooth(double a, double b, double x)
+    {
+        double u = Math.Clamp((x - a) / (b - a), 0.0, 1.0);
+        return u * u * (3 - 2 * u);
     }
 }
