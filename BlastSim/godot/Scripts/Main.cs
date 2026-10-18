@@ -507,13 +507,27 @@ public partial class Main : Node3D
                $"Bâtiments atteints : {tally.Hit} / {tally.Total}\n" +
                $"  effondrés {tally.Collapsed}   graves {tally.Severe}   modérés {tally.Moderate}   légers {tally.Light}\n" +
                $"  en feu {tally.Burning}\n" +
-               $"Victimes : {tally.Deaths:N0} morts   {tally.Injured:N0} blessés   (sur {tally.Population:N0} présents)\n{fps}";
+               $"Victimes : {tally.Deaths:N0} morts   {tally.Injured:N0} blessés   (sur {tally.Population:N0} présents)\n" +
+               DescribeFallout() + fps;
+    }
+
+    private string DescribeFallout()
+    {
+        if (_fallout is not { } f) return "";
+        double hours = _time / 3600.0;
+        if (hours < f.FirstArrivalHours)
+            return $"Retombées : premières arrivées dans {Format.Duration((f.FirstArrivalHours - hours) * 3600)} (zone prévue en pointillés)\n";
+        return $"Retombées : dose cumulée maximale {f.MaxDoseNow:N0} rad (en plein air)\n";
     }
 
     private static string DescribeRadii(Detonation d, EffectRadii r, FalloutField? fallout)
     {
-        string falloutRow = fallout is null ? ""
-            : $"[color=#c070ff]●[/color] Retombées, 100 rad en 48 h : [b]{Format.Distance(fallout.Range100Rad48hM)}[/b] sous le vent\n";
+        string falloutRow = fallout is null
+            ? d.NuclearDevice is null ? ""
+              : "[color=#999999]● Retombées : aucune — la boule de feu ne touche pas le sol (explosion trop haute). " +
+                "Mettez la hauteur à 0 m pour des retombées poussées par le vent.[/color]\n"
+            : $"[color=#c070ff]●[/color] Retombées, 100 rad en 48 h : [b]{Format.Distance(fallout.Range100Rad48hM)}[/b] sous le vent\n" +
+              "[color=#999999]Zone prévue en pointillés au sol ; accélérez le temps (×1 000) et dézoomez pour les voir tomber.[/color]\n";
         static string Row(string color, string label, double m) =>
             m > 0 ? $"[color={color}]●[/color] {label} : [b]{Format.Distance(m)}[/b]\n" : "";
         string yieldText = d.NuclearDevice is not null ? Format.Yield(d.YieldKt) : $"{Format.Mass(d.Charge!.TntEquivalentKg)} éq. TNT";
@@ -523,7 +537,7 @@ public partial class Main : Node3D
                Row("#ff9a2a", "35 kPa — la plupart des bâtiments", r.Overpressure35KPaM) +
                Row("#fff070", "7 kPa — vitres, dégâts légers", r.Overpressure7KPaM) +
                Row("#ff5ad0", "Brûlures du 3e degré", r.ThirdDegreeBurnsM) +
-               Row("#55ff77", "Radiation 500 rad", r.Radiation500RadM) +
+               Row("#55ff77", "Radiation initiale 500 rad (1re minute, cercle)", r.Radiation500RadM) +
                Row("#bbbbbb", "Danger des éclats", r.FragmentHazardM) + falloutRow;
     }
 }

@@ -25,7 +25,7 @@ public partial class Hud : CanvasLayer
     private OptionButton _scenario = null!, _mode = null!, _moment = null!, _cityChoice = null!;
     private Label _cityStatus = null!, _attribution = null!;
     private HSlider _yield = null!, _height = null!, _time = null!, _windDir = null!, _windSpeed = null!;
-    private Label _yieldLabel = null!, _heightLabel = null!, _timeLabel = null!, _windLabel = null!;
+    private Label _yieldLabel = null!, _heightLabel = null!, _timeLabel = null!, _windLabel = null!, _windSpeedLabel = null!;
     private RichTextLabel _info = null!;
     private Label _live = null!;
     private ColorRect _flash = null!;
@@ -57,9 +57,12 @@ public partial class Hud : CanvasLayer
         panel.OffsetLeft = -360;
         AddChild(panel);
 
-        var box = new VBoxContainer();
-        box.AddThemeConstantOverride("separation", 8);
-        panel.AddChild(box);
+        // Le panneau défile si la fenêtre est trop basse ; jamais de défilement horizontal.
+        var scroll = new ScrollContainer { HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
+        panel.AddChild(scroll);
+        var box = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        box.AddThemeConstantOverride("separation", 6);
+        scroll.AddChild(box);
 
         var title = new Label { Text = "BLASTSIM" };
         title.AddThemeFontSizeOverride("font_size", 26);
@@ -95,6 +98,8 @@ public partial class Hud : CanvasLayer
         // Jusqu'à ×4 000 : les retombées se jouent sur des heures.
         (_timeLabel, _time) = AddSlider(box, -2.0, 3.6, 0.0, step: 0.01);
         (_windLabel, _windDir) = AddSlider(box, 0, 355, 90, step: 5);
+        _windSpeedLabel = Caption("");
+        box.AddChild(_windSpeedLabel);
         _windSpeed = new HSlider { MinValue = 0.5, MaxValue = 30, Step = 0.5, Value = 7 };
         box.AddChild(_windSpeed);
         _windDir.ValueChanged += _ => RefreshLabels();
@@ -105,8 +110,8 @@ public partial class Hud : CanvasLayer
 
         box.AddChild(Caption("Moment de l'explosion"));
         var moment = new OptionButton();
-        moment.AddItem("Jour (population au travail, 25 % dehors)");
-        moment.AddItem("Nuit (population chez elle, 4 % dehors)");
+        moment.AddItem("Jour (au travail, 25 % dehors)");
+        moment.AddItem("Nuit (chez soi, 4 % dehors)");
         moment.ItemSelected += i => TimeOfDayChanged?.Invoke(i == 0 ? TimeOfDay.Day : TimeOfDay.Night);
         box.AddChild(moment);
         _moment = moment;
@@ -155,6 +160,14 @@ public partial class Hud : CanvasLayer
         _live.AddThemeColorOverride("font_outline_color", Colors.Black);
         _live.AddThemeConstantOverride("outline_size", 6);
         AddChild(_live);
+
+        // Les menus ne doivent pas élargir le panneau avec leurs libellés les plus longs.
+        foreach (var option in new[] { _cityChoice, _scenario, _mode, _moment })
+        {
+            option.FitToLongestItem = false;
+            option.ClipText = true;
+            option.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        }
 
         _scenario.Select(Array.FindIndex(Scenarios.All.ToArray(), f => f().Name.StartsWith("Hiroshima")) + 1);
         OnScenarioSelected(_scenario.Selected);
@@ -270,7 +283,8 @@ public partial class Hud : CanvasLayer
             : $"Puissance : {Format.Yield(YieldValue)}";
         _heightLabel.Text = $"Hauteur d'explosion : {Format.Distance(HeightM)}";
         _timeLabel.Text = $"Vitesse du temps : ×{Format.Scale(TimeScale)}";
-        _windLabel.Text = $"Vent vers {Format.Compass(WindTowardDeg)} : {WindSpeedMs:0.#} m/s ({WindSpeedMs * 3.6:0} km/h)";
+        _windLabel.Text = $"Vent vers {Format.Compass(WindTowardDeg)} — retombées (explosion au sol)";
+        _windSpeedLabel.Text = $"Vitesse du vent : {WindSpeedMs:0.#} m/s ({WindSpeedMs * 3.6:0} km/h)";
     }
 
     private static Label Caption(string text)

@@ -8,7 +8,9 @@ namespace BlastSimGame;
 /// <summary>
 /// Carte des doses de retombées pour le sol : grille dans le repère du vent (u sous le
 /// vent, v en travers), débit H+1 et temps d'arrivée précalculés par cellule, dose
-/// cumulée recalculée au fil du temps et envoyée au shader sous forme de texture.
+/// cumulée recalculée au fil du temps et envoyée au shader sous forme de texture
+/// (R : dose cumulée à l'instant présent, G : prévision à 48 h, pour montrer dès
+/// l'explosion où les retombées vont tomber).
 /// </summary>
 public sealed class FalloutField
 {
@@ -18,7 +20,9 @@ public sealed class FalloutField
     // Limite d'affichage : débit H+1 en dessous duquel on considère la zone propre.
     private const double VisibleRateH1 = 0.5;
 
-    private readonly float[] _rate, _arrival, _dose;
+    public const double ForecastHours = 48.0;
+
+    private readonly float[] _rate, _arrival, _texels;
     private readonly byte[] _bytes;
     private readonly Image _image;
     private double _lastHours = -1;
@@ -47,7 +51,7 @@ public sealed class FalloutField
         int n = CellsDownwind * CellsCrosswind;
         _rate = new float[n];
         _arrival = new float[n];
-        _dose = new float[n];
+        _texels = new float[2 * n];
         for (int j = 0; j < CellsCrosswind; j++)
         for (int i = 0; i < CellsDownwind; i++)
         {
@@ -56,10 +60,14 @@ public sealed class FalloutField
             // Repère local : x = u·d − v·d⊥ … avec d⊥ = (−dz, dx).
             double x = u * dx - v * dz, z = u * dz + v * dx;
             _rate[j * CellsDownwind + i] = (float)model.DoseRateAtH1(x, z);
-            _arrival[j * CellsDownwind + i] = (float)model.ArrivalTimeHours(x, z);
+            int k = j * CellsDownwind + i;
+            _arrival[k] = (float)model.ArrivalTimeHours(x, z);
+            _texels[2 * k + 1] = (float)Fallout.DoseFromRate(_rate[k], _arrival[k], ForecastHours);
+            if (_rate[k] >= VisibleRateH1) FirstArrivalHours = Math.Min(FirstArrivalHours, _arrival[k]);
         }
-        _bytes = new byte[n * 4];
-        _image = Image.CreateFromData(CellsDownwind, CellsCrosswind, false, Image.Format.Rf, _bytes);
+        _bytes = new byte[n * 8];
+        Buffer.BlockCopy(_texels, 0, _bytes, 0, _bytes.Length);
+        _image = Image.CreateFromData(CellsDownwind, CellsCrosswind, false, Image.Format.Rgf, _bytes);
         Texture = ImageTexture.CreateFromImage(_image);
 
         // Distance sous le vent où la dose sur 48 h atteint encore 100 rad.
@@ -74,16 +82,28 @@ public sealed class FalloutField
     public ImageTexture Texture { get; }
     public double Range100Rad48hM { get; }
 
+    /// <summary>Arrivée des premières retombées notables (h).</summary>
+    public double FirstArrivalHours { get; } = double.PositiveInfinity;
+
+    /// <summary>Plus forte dose cumulée en plein air à l'instant présent (rad).</summary>
+    public double MaxDoseNow { get; private set; }
+
     /// <summary>Met à jour la dose cumulée au temps donné (h depuis l'explosion).</summary>
     public void Update(double hours)
     {
         // Inutile de retransférer la texture pour des variations imperceptibles.
         if (_lastHours >= 0 && Math.Abs(hours - _lastHours) < 0.002 * Math.Max(hours, 0.05)) return;
         _lastHours = hours;
+        double max = 0;
         for (int k = 0; k < _rate.Length; k++)
-            _dose[k] = (float)Fallout.DoseFromRate(_rate[k], _arrival[k], hours);
-        Buffer.BlockCopy(_dose, 0, _bytes, 0, _bytes.Length);
-        _image.SetData(CellsDownwind, CellsCrosswind, false, Image.Format.Rf, _bytes);
+        {
+            float dose = (float)Fallout.DoseFromRate(_rate[k], _arrival[k], hours);
+            _texels[2 * k] = dose;
+            if (dose > max) max = dose;
+        }
+        MaxDoseNow = max;
+        Buffer.BlockCopy(_texels, 0, _bytes, 0, _bytes.Length);
+        _image.SetData(CellsDownwind, CellsCrosswind, false, Image.Format.Rgf, _bytes);
         Texture.Update(_image);
     }
 }

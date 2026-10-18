@@ -38,6 +38,14 @@ void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
+// Une couleur par décade de dose : 1-10, 10-100, 100-1000, > 1000 rad.
+vec3 DoseColor(float level) {
+	return level < 1.0 ? vec3(0.95, 0.90, 0.20)
+	     : level < 2.0 ? vec3(1.00, 0.55, 0.10)
+	     : level < 3.0 ? vec3(0.95, 0.15, 0.10)
+	     : vec3(0.65, 0.10, 0.75);
+}
+
 float ring(float d, float r) {
 	if (r <= 0.0) return 0.0;
 	float w = max(r * 0.006, 3.0);
@@ -100,17 +108,23 @@ void fragment() {
 		float v = dot(rel, vec2(-fallout_dir.y, fallout_dir.x));
 		vec2 fuv = vec2((u - fallout_u.x) / (fallout_u.y - fallout_u.x), (v + fallout_v) / (2.0 * fallout_v));
 		if (all(greaterThanEqual(fuv, vec2(0.0))) && all(lessThanEqual(fuv, vec2(1.0)))) {
-			float dose = texture(fallout_tex, fuv).r;
-			if (dose > 1.0) {
-				// Une couleur par décade : 1-10, 10-100, 100-1000, > 1000 rad.
-				float level = log(dose) / log(10.0);
-				vec3 c = level < 1.0 ? vec3(0.95, 0.90, 0.20)
-				       : level < 2.0 ? vec3(1.00, 0.55, 0.10)
-				       : level < 3.0 ? vec3(0.95, 0.15, 0.10)
-				       : vec3(0.65, 0.10, 0.75);
+			vec2 dose = texture(fallout_tex, fuv).rg;   // r : cumulée maintenant, g : prévue à 48 h
+			// Prévision : contours pointillés des décades, visibles dès l'explosion.
+			if (dose.g > 1.0) {
+				float level = log(dose.g) / log(10.0);
+				float line = 1.0 - smoothstep(0.0, 0.05, min(fract(level), 1.0 - fract(level)));
+				float dash = step(0.5, fract((u + v) / max(fallout_u.y * 0.01, 50.0)));
+				vec3 c = DoseColor(level);
+				col = mix(col, c, 0.06);
+				emission += c * line * dash * 0.9;
+			}
+			// Retombées déjà tombées : remplissage par décade.
+			if (dose.r > 1.0) {
+				float level = log(dose.r) / log(10.0);
 				float line = 1.0 - smoothstep(0.0, 0.04, min(fract(level), 1.0 - fract(level)));
-				col = mix(col, c, 0.38);
-				emission += c * (0.08 + 1.2 * line);
+				vec3 c = DoseColor(level);
+				col = mix(col, c, 0.4);
+				emission += c * (0.1 + 1.2 * line);
 			}
 		}
 	}
