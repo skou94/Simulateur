@@ -28,9 +28,13 @@ public static class Scenarios
         new ConventionalCharge(Explosive.AmmoniumNitrate, 2.75e6),
         heightOfBurstM: 0.0, name: "Beyrouth 2020");
 
-    /// <summary>Hiroshima, 6 août 1945 : Little Boy, arme à canon à uranium, 15 kt à 580 m.</summary>
+    /// <summary>
+    /// Hiroshima, 6 août 1945 : Little Boy, arme à canon à uranium, 15 kt à 580 m.
+    /// Cas bas de Glasstone pour la radiation (~10 Gy à 1 km) : environ 2 fois la dosimétrie
+    /// de référence DS02 (~4-5 Gy à 1 km), contre ~5 fois pour le cas haut.
+    /// </summary>
     public static Detonation Hiroshima() => Detonation.Nuclear(
-        new NuclearDevice(15.0, NuclearDesign.Fission, HighRadiationOutput: true),
+        new NuclearDevice(15.0, NuclearDesign.Fission),
         heightOfBurstM: 580.0, name: "Hiroshima (Little Boy)");
 
     /// <summary>Nagasaki, 9 août 1945 : Fat Man, implosion au plutonium, 21 kt à 503 m.</summary>
@@ -53,8 +57,16 @@ public static class Scenarios
         new NuclearDevice(50_000.0, NuclearDesign.Thermonuclear, FissionFraction: 0.03),
         heightOfBurstM: 4000.0, name: "Tsar Bomba");
 
+    /// <summary>
+    /// Castle Bravo, 1er mars 1954 (atoll de Bikini) : 15 Mt (fission ~67 %) au sol, le pire
+    /// accident de retombées de l'histoire des essais américains.
+    /// </summary>
+    public static Detonation CastleBravo() => Detonation.Nuclear(
+        new NuclearDevice(15_000.0, NuclearDesign.Thermonuclear, FissionFraction: 0.67),
+        heightOfBurstM: 0.0, name: "Castle Bravo (au sol)");
+
     public static IReadOnlyList<Func<Detonation>> All { get; } = new Func<Detonation>[]
     {
-        HandGrenade, Mk82, Moab, Beirut2020, Hiroshima, Nagasaki, NeutronBomb, StrategicWarhead, TsarBomba,
+        HandGrenade, Mk82, Moab, Beirut2020, Hiroshima, Nagasaki, NeutronBomb, StrategicWarhead, TsarBomba, CastleBravo,
     };
 }

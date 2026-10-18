@@ -1,13 +1,20 @@
 using System;
 using System.Collections.Generic;
 using BlastPhysics;
+using BlastPhysics.Casualties;
 using BlastPhysics.Damage;
+using BlastPhysics.Nuclear;
 using Godot;
 
 namespace BlastSimGame;
 
 /// <summary>Bilan des dégâts affiché dans l'interface.</summary>
-public readonly record struct DamageTally(int Total, int Hit, int Light, int Moderate, int Severe, int Collapsed, int Burning);
+public readonly record struct DamageTally(
+    int Total, int Hit, int Light, int Moderate, int Severe, int Collapsed, int Burning,
+    double Population, double Deaths, double Injured);
+
+/// <summary>Paramètres de l'estimation des victimes pour une détonation.</summary>
+public readonly record struct CasualtyContext(double ThirdDegreeCalPerCm2, double SecondDegreeCalPerCm2);
 
 /// <summary>
 /// Rendu de la ville en un seul MultiMesh, et application des effets physiques :
@@ -47,6 +54,7 @@ public partial class CityView : MultiMeshInstance3D
         public double AnimStart, AnimDuration;
         public double FireStart;
         public float Fire, Char, Broken;
+        public float FalloutRad;
     }
 
     private CityModel _city = null!;
@@ -63,12 +71,28 @@ public partial class CityView : MultiMeshInstance3D
     private bool _thermalDone;
     private int _hit, _light, _moderate, _severe, _collapsed, _burning;
 
+    // Victimes : espérance par bâtiment (occupants × probabilité), totaux mis à jour par différence.
+    private float[] _occupants = Array.Empty<float>();
+    private double[] _deaths = Array.Empty<double>(), _injured = Array.Empty<double>();
+    private double _population, _deathTotal, _injuredTotal;
+    private CasualtyContext _casualty;
+
+    // Retombées : débit H+1 et arrivée par bâtiment ; dose réévaluée par tranches.
+    private float[] _falloutRate = Array.Empty<float>(), _falloutArrival = Array.Empty<float>();
+    private bool _hasFallout;
+    private int _falloutCursor;
+    private const int FalloutSlice = 3000;
+
+    /// <summary>Moment de la journée : répartition de la population (effet à la prochaine détonation).</summary>
+    public TimeOfDay TimeOfDay { get; set; } = TimeOfDay.Day;
+
     // Précalculés pour l'animation : rotation propre (cos, sin) et axe horizontal de
     // bascule (perpendiculaire à la direction du point zéro), par bâtiment.
     private float[] _cosYaw = Array.Empty<float>(), _sinYaw = Array.Empty<float>();
     private float[] _tiltAxisX = Array.Empty<float>(), _tiltAxisZ = Array.Empty<float>();
 
-    public DamageTally Tally => new(_state.Length, _hit, _light, _moderate, _severe, _collapsed, _burning);
+    public DamageTally Tally => new(_state.Length, _hit, _light, _moderate, _severe, _collapsed, _burning,
+                                    _population, _deathTotal, _injuredTotal);
 
     public void Build(CityModel city)
     {
@@ -90,6 +114,9 @@ public partial class CityView : MultiMeshInstance3D
         _buffer = new float[n * Stride];
         _cosYaw = new float[n]; _sinYaw = new float[n];
         _tiltAxisX = new float[n]; _tiltAxisZ = new float[n];
+        _occupants = new float[n];
+        _falloutRate = new float[n]; _falloutArrival = new float[n];
+        _deaths = new double[n]; _injured = new double[n];
         for (int i = 0; i < n; i++)
         {
             _cosYaw[i] = MathF.Cos(city.Buildings[i].Rotation);
@@ -101,17 +128,25 @@ public partial class CityView : MultiMeshInstance3D
         ResetDamage();
     }
 
+    /// <summary>Éclairage nocturne des fenêtres (0 le jour, 1 la nuit).</summary>
+    public void SetNight(float amount) => ((ShaderMaterial)MaterialOverride).SetShaderParameter("night", amount);
+
     public void ResetDamage()
     {
         _profile = null;
+        _hasFallout = false;
         _thermalDone = false;
         _animating.Clear();
         _igniting.Clear();
         _hit = _light = _moderate = _severe = _collapsed = _burning = 0;
+        _population = _deathTotal = _injuredTotal = 0;
         for (int i = 0; i < _state.Length; i++)
         {
             var b = _city.Buildings[i];
             _state[i] = new State { CurrentHeight = b.Height, TargetHeight = b.Height };
+            _occupants[i] = (float)CasualtyModel.Occupants(b.FloorAreaM2, b.Use, TimeOfDay);
+            _population += _occupants[i];
+            _deaths[i] = _injured[i] = 0;
             WriteTransform(i);
             WriteCustom(i);
         }
@@ -119,10 +154,11 @@ public partial class CityView : MultiMeshInstance3D
     }
 
     /// <summary>Prépare l'impact : charge de chaque bâtiment selon sa distance au point zéro.</summary>
-    public void Prepare(RadialProfile profile, Vector2 groundZero, double thermalTimeS)
+    public void Prepare(RadialProfile profile, Vector2 groundZero, double thermalTimeS, CasualtyContext casualty)
     {
         ResetDamage();
         _profile = profile;
+        _casualty = casualty;
         _thermalTimeS = thermalTimeS;
         var arrival = new double[_state.Length];
         for (int i = 0; i < _state.Length; i++)
@@ -143,6 +179,37 @@ public partial class CityView : MultiMeshInstance3D
         for (int i = 0; i < _byArrival.Length; i++) _byArrival[i] = i;
         Array.Sort(arrival, _byArrival);
         _nextArrival = 0;
+    }
+
+    /// <summary>Retombées de la détonation en cours (null : explosion aérienne ou conventionnelle).</summary>
+    public void SetFallout(Fallout? model, Vector2 groundZero)
+    {
+        _hasFallout = model is { ContactFraction: > 0 };
+        if (!_hasFallout) return;
+        for (int i = 0; i < _state.Length; i++)
+        {
+            var b = _city.Buildings[i];
+            _falloutRate[i] = (float)model!.DoseRateAtH1(b.X - groundZero.X, b.Z - groundZero.Y);
+            _falloutArrival[i] = (float)model.ArrivalTimeHours(b.X - groundZero.X, b.Z - groundZero.Y);
+        }
+        _falloutCursor = 0;
+    }
+
+    private void UpdateFallout(double t)
+    {
+        double hours = t / 3600.0;
+        int n = _state.Length;
+        for (int k = 0; k < FalloutSlice && k < n; k++)
+        {
+            int i = _falloutCursor;
+            _falloutCursor = (_falloutCursor + 1) % n;
+            if (_falloutRate[i] <= 0) continue;
+            ref var s = ref _state[i];
+            float dose = (float)Fallout.DoseFromRate(_falloutRate[i], _falloutArrival[i], hours);
+            if (dose - s.FalloutRad < 0.01f * Math.Max(s.FalloutRad, 1f)) continue;
+            s.FalloutRad = dose;
+            if (s.BlastResolved) UpdateCasualties(i);
+        }
     }
 
     /// <summary>Fait avancer les effets jusqu'au temps de simulation t (s depuis l'explosion).</summary>
@@ -176,11 +243,18 @@ public partial class CityView : MultiMeshInstance3D
             int i = _igniting[k];
             ref var s = ref _state[i];
             if (t < s.FireStart) continue;
-            if (!s.Burning) { s.Burning = true; _burning++; }
+            if (!s.Burning)
+            {
+                s.Burning = true;
+                _burning++;
+                if (s.BlastResolved) UpdateCasualties(i);
+            }
             s.Fire = (float)Math.Clamp((t - s.FireStart) / 20.0, 0.0, 1.0);
             WriteCustom(i);
             if (s.Fire >= 1f) RemoveSwap(_igniting, k);
         }
+
+        if (_hasFallout) UpdateFallout(t);
 
         Flush();
     }
@@ -268,6 +342,23 @@ public partial class CityView : MultiMeshInstance3D
         }
         if (s.Damage >= DamageState.Severe) s.Char = Math.Max(s.Char, 0.35f);
         WriteCustom(i);
+        UpdateCasualties(i);
+    }
+
+    /// <summary>Recalcule les victimes attendues d'un bâtiment et corrige les totaux.</summary>
+    private void UpdateCasualties(int i)
+    {
+        ref var s = ref _state[i];
+        var b = _city.Buildings[i];
+        var exposure = new Exposure(s.Load.OverpressurePa, s.Load.ImpulsePaS, s.Load.ThermalCalPerCm2,
+                                    _casualty.ThirdDegreeCalPerCm2, _casualty.SecondDegreeCalPerCm2,
+                                    s.Load.RadiationRad, s.FalloutRad, s.Load.FragmentHitProbability);
+        var risk = CasualtyModel.Occupant(b.Structure, s.Damage, s.Burning, exposure, TimeOfDay);
+        double deaths = _occupants[i] * risk.Death, injured = _occupants[i] * risk.Injury;
+        _deathTotal += deaths - _deaths[i];
+        _injuredTotal += injured - _injured[i];
+        _deaths[i] = deaths;
+        _injured[i] = injured;
     }
 
     // M = R_bascule · R_lacet · S, écrite directement dans le tampon (format MultiMesh :

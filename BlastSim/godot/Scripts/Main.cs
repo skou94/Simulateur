@@ -1,5 +1,7 @@
 using System;
 using BlastPhysics;
+using BlastPhysics.Casualties;
+using BlastPhysics.Nuclear;
 using Godot;
 using GEnvironment = Godot.Environment;
 
@@ -26,6 +28,7 @@ public partial class Main : Node3D
     private RadialProfile? _profile;
     private EffectRadii _radii;
     private ExplosionView _fx = null!;
+    private FalloutField? _fallout;
     private Vector2 _groundZero = Vector2.Zero;
     private MeshInstance3D _marker = null!;
     private double _time;
@@ -33,6 +36,9 @@ public partial class Main : Node3D
     private double _scorchRadius;
     private bool _zonesVisible = true;
     private bool _cameraShaken;
+    private GEnvironment _environment = null!;
+    private ProceduralSkyMaterial _sky = null!;
+    private DirectionalLight3D _sun = null!;
 
     public override void _Ready()
     {
@@ -41,7 +47,6 @@ public partial class Main : Node3D
 
         _cityView = new CityView();
         AddChild(_cityView);
-        GenerateCity();
 
         _camera = new OrbitCamera();
         AddChild(_camera);
@@ -69,8 +74,11 @@ public partial class Main : Node3D
         AddChild(_hud);
         _hud.DetonateRequested += Detonate;
         _hud.ResetRequested += ResetScene;
-        _hud.NewCityRequested += () => { _citySeed++; GenerateCity(); ResetScene(); };
+        _hud.NewCityRequested += () => { _citySeed++; _hud.SelectCity(0); GenerateCity(); ResetScene(); };
         _hud.ZonesToggled += on => _zonesVisible = on;
+        _hud.TimeOfDayChanged += SetTimeOfDay;
+        _hud.CitySelected += OnCitySelected;
+        GenerateCity();
         _hud.SetInfo("Choisissez un scénario puis [b]DÉTONER[/b].");
         ApplyCommandLine();
     }
@@ -105,6 +113,8 @@ public partial class Main : Node3D
     /// Arguments après « -- » : --demo (détone le scénario affiché après 1 s),
     /// --scenario=N, --time-scale=x, --camera=distance,yaw,pitch.
     /// </summary>
+    private bool _demoPending;
+
     private void ApplyCommandLine()
     {
         foreach (string arg in OS.GetCmdlineUserArgs())
@@ -115,12 +125,27 @@ public partial class Main : Node3D
             switch (kv[0])
             {
                 case "demo":
-                    GetTree().CreateTimer(1.0).Timeout += Detonate;
+                    _demoPending = true;
                     break;
                 case "benchmark":
                     _benchmarkSeconds = double.Parse(value, inv);
                     DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
                     RenderingServer.ViewportSetMeasureRenderTime(GetViewport().GetViewportRid(), true);
+                    break;
+                case "city":
+                    _hud.SelectCity(int.Parse(value, inv));
+                    break;
+                case "custom":
+                    // --custom=type,puissance,hauteur (type : 0 fission, 1 thermo, 2 neutrons, 3 TNT)
+                    var cv = value.Split(',');
+                    _hud.SetCustom(int.Parse(cv[0], inv), double.Parse(cv[1], inv), double.Parse(cv[2], inv));
+                    break;
+                case "wind":
+                    var wv = value.Split(',');
+                    _hud.SetWind(double.Parse(wv[0], inv), double.Parse(wv[1], inv));
+                    break;
+                case "night":
+                    _hud.SelectTimeOfDay(TimeOfDay.Night);
                     break;
                 case "scenario":
                     _hud.SelectScenario(int.Parse(value, inv));
@@ -136,11 +161,12 @@ public partial class Main : Node3D
                     break;
             }
         }
+        StartPendingDemo();
     }
 
     private void BuildEnvironment()
     {
-        var sky = new ProceduralSkyMaterial
+        var sky = _sky = new ProceduralSkyMaterial
         {
             SkyTopColor = new Color(0.22f, 0.40f, 0.68f),
             SkyHorizonColor = new Color(0.66f, 0.72f, 0.80f),
@@ -148,7 +174,7 @@ public partial class Main : Node3D
             GroundBottomColor = new Color(0.20f, 0.20f, 0.18f),
             SunAngleMax = 30f,
         };
-        var env = new GEnvironment
+        var env = _environment = new GEnvironment
         {
             BackgroundMode = GEnvironment.BGMode.Sky,
             Sky = new Sky { SkyMaterial = sky },
@@ -168,7 +194,7 @@ public partial class Main : Node3D
         };
         AddChild(new WorldEnvironment { Environment = env });
 
-        var sun = new DirectionalLight3D
+        var sun = _sun = new DirectionalLight3D
         {
             LightEnergy = 1.25f,
             LightColor = new Color(1f, 0.96f, 0.9f),
@@ -177,6 +203,24 @@ public partial class Main : Node3D
             RotationDegrees = new Vector3(-38f, 35f, 0f),
         };
         AddChild(sun);
+    }
+
+    /// <summary>Jour ou nuit : population (à la prochaine détonation) et éclairage de la scène.</summary>
+    private void SetTimeOfDay(TimeOfDay time)
+    {
+        bool night = time == TimeOfDay.Night;
+        _cityView.TimeOfDay = time;
+        if (!_fx.Active) _cityView.ResetDamage();
+        _cityView.SetNight(night ? 1f : 0f);
+        // Nuit : clair de lune bleuté, assez pour lire la ville et le nuage.
+        _sun.LightEnergy = night ? 0.22f : 1.25f;
+        _sun.LightColor = night ? new Color(0.55f, 0.65f, 1f) : new Color(1f, 0.96f, 0.9f);
+        _sky.SkyTopColor = night ? new Color(0.015f, 0.025f, 0.07f) : new Color(0.22f, 0.40f, 0.68f);
+        _sky.SkyHorizonColor = night ? new Color(0.07f, 0.09f, 0.16f) : new Color(0.66f, 0.72f, 0.80f);
+        _sky.GroundHorizonColor = night ? new Color(0.03f, 0.03f, 0.04f) : new Color(0.50f, 0.52f, 0.50f);
+        _sky.GroundBottomColor = night ? new Color(0.01f, 0.01f, 0.01f) : new Color(0.20f, 0.20f, 0.18f);
+        _environment.AmbientLightEnergy = night ? 0.35f : 0.7f;
+        _environment.FogLightColor = night ? new Color(0.05f, 0.06f, 0.09f) : new Color(0.70f, 0.75f, 0.82f);
     }
 
     private void BuildGround()
@@ -192,19 +236,84 @@ public partial class Main : Node3D
         });
     }
 
-    private void GenerateCity()
-    {
-        _city = CityModel.Generate(_citySeed);
-        _cityView.Build(_city);
+    private void GenerateCity() => ShowCity(CityModel.Generate(_citySeed));
 
-        int n = _city.BlocksPerSide;
-        var map = Image.CreateEmpty(n, n, false, Image.Format.R8);
-        for (int j = 0; j < n; j++)
-        for (int i = 0; i < n; i++)
-            map.SetPixel(i, j, _city.Parks[j * n + i] ? Colors.White : Colors.Black);
-        _groundMat.SetShaderParameter("block_map", ImageTexture.CreateFromImage(map));
-        _groundMat.SetShaderParameter("city_half", _city.HalfSize);
-        GD.Print($"Ville générée : {_city.Buildings.Count} bâtiments sur {2 * _city.HalfSize / 1000:0.#} km de côté.");
+    private void ShowCity(CityModel city)
+    {
+        _city = city;
+        _cityView.Build(_city);
+        _groundZero = Vector2.Zero;
+        _camera.Target = Vector3.Zero;
+
+        if (city.Map is { } rgba)
+        {
+            var map = Image.CreateFromData(city.MapSize, city.MapSize, false, Image.Format.Rgba8, rgba);
+            _groundMat.SetShaderParameter("map_tex", ImageTexture.CreateFromImage(map));
+            _groundMat.SetShaderParameter("map_half", city.HalfSize);
+            _groundMat.SetShaderParameter("use_map", 1f);
+        }
+        else
+        {
+            int n = city.BlocksPerSide;
+            var map = Image.CreateEmpty(n, n, false, Image.Format.R8);
+            for (int j = 0; j < n; j++)
+            for (int i = 0; i < n; i++)
+                map.SetPixel(i, j, city.Parks[j * n + i] ? Colors.White : Colors.Black);
+            _groundMat.SetShaderParameter("block_map", ImageTexture.CreateFromImage(map));
+            _groundMat.SetShaderParameter("city_half", city.HalfSize);
+            _groundMat.SetShaderParameter("use_map", 0f);
+        }
+        _hud.SetAttribution(city.RealName is null ? "" : "Données © les contributeurs d'OpenStreetMap (ODbL)");
+        GD.Print($"Ville : {city.RealName ?? "procédurale"}, {city.Buildings.Count} bâtiments.");
+    }
+
+    // Chargement d'une ville réelle en tâche de fond : l'interface reste fluide pendant le
+    // téléchargement (jusqu'à ~1 min la première fois, puis lecture du cache).
+    private System.Threading.Tasks.Task<CityModel>? _cityLoading;
+    private string _cityStatus = "";
+
+    private void OnCitySelected(int index)
+    {
+        if (_cityLoading is { IsCompleted: false }) return;
+        if (_fx.Active) ResetScene();
+        if (index == 0) { GenerateCity(); return; }
+        var preset = CityData.CityPresets.All[index - 1];
+        string cache = ProjectSettings.GlobalizePath("user://osm");
+        var progress = new Progress<string>(msg => _cityStatus = msg);
+        _cityStatus = "Préparation…";
+        _cityLoading = System.Threading.Tasks.Task.Run(async () =>
+            CityModel.FromReal(await CityData.OsmCityLoader.LoadAsync(preset, cache, progress), _citySeed));
+    }
+
+    // En mode démo, la détonation attend que la ville soit prête.
+    private void StartPendingDemo()
+    {
+        if (!_demoPending || _cityLoading is { IsCompleted: false }) return;
+        _demoPending = false;
+        GetTree().CreateTimer(1.0).Timeout += Detonate;
+    }
+
+    private void PollCityLoading()
+    {
+        if (_cityLoading is null) return;
+        if (!_cityLoading.IsCompleted)
+        {
+            _hud.SetCityStatus(_cityStatus);
+            return;
+        }
+        if (_cityLoading.IsCompletedSuccessfully)
+        {
+            ShowCity(_cityLoading.Result);
+            _hud.SetCityStatus("");
+            StartPendingDemo();
+        }
+        else
+        {
+            var error = _cityLoading.Exception?.GetBaseException().Message ?? "erreur inconnue";
+            GD.PushError($"Chargement de la ville impossible : {error}");
+            _hud.SetCityStatus($"Échec du chargement : {error}");
+        }
+        _cityLoading = null;
     }
 
     private void OnGroundClicked(Vector3 p)
@@ -237,7 +346,18 @@ public partial class Main : Node3D
         _scorchRadius = RangeFinder.OuterRange(r => _profile.At(r).ThermalCalPerCm2, GroundScorchCalPerCm2, maxRange);
         _thermalTime = _detonation.Fireball is { } fb ? 3.0 * fb.ThermalPulseMaxTimeS : double.PositiveInfinity;
 
-        _cityView.Prepare(_profile, _groundZero, _thermalTime);
+        var casualty = _detonation.Thermal is { } th
+            ? new CasualtyContext(th.BurnThresholdCalPerCm2(BurnDegree.Third), th.BurnThresholdCalPerCm2(BurnDegree.Second))
+            : new CasualtyContext(0, 0);
+        _cityView.Prepare(_profile, _groundZero, _thermalTime, casualty);
+        _fallout = null;
+        if (_detonation.NuclearDevice is { } device)
+        {
+            var model = new Fallout(device, _detonation.Fireball!, _hud.WindSpeedMs, _hud.WindTowardDeg);
+            if (model.ContactFraction > 0.01) _fallout = new FalloutField(model);
+        }
+        _cityView.SetFallout(_fallout?.Model, _groundZero);
+        Mark("Retombées");
         Mark("CityView.Prepare");
         _fx.Position = new Vector3(_groundZero.X, 0f, _groundZero.Y);
         _fx.Setup(_detonation, _profile, _radii);
@@ -245,13 +365,14 @@ public partial class Main : Node3D
         _time = 0.0;
         _cameraShaken = false;
         _hud.Paused = false;
-        _hud.SetInfo(DescribeRadii(_detonation, _radii));
+        _hud.SetInfo(DescribeRadii(_detonation, _radii, _fallout));
         Mark("SetInfo");
     }
 
     private void ClearExplosion()
     {
         _fx.Deactivate();
+        _fallout = null;
         _detonation = null;
         _profile = null;
         _hud.SetFlash(0f);
@@ -306,6 +427,7 @@ public partial class Main : Node3D
     {
         if (_benchmarkSeconds > 0) Benchmark(delta);
         if (_warmupFrames > 0) StepShaderWarmup();
+        PollCityLoading();
         if (_fx.Active && _profile is not null && !_hud.Paused)
         {
             _time += delta * _hud.TimeScale;
@@ -315,11 +437,14 @@ public partial class Main : Node3D
             _probe.Restart();
             _fx.Update(_time);
             _lastFxMs = _probe.Elapsed.TotalMilliseconds;
+            _fallout?.Update(_time / 3600.0);
             _hud.SetFlash(_fx.FlashIntensity * 0.9f);
             ShakeCameraWhenFrontPasses();
         }
         UpdateGroundUniforms();
         UpdateMarker();
+        // Brouillard réglé pour la ville ; on l'atténue en vue lointaine (retombées sur des centaines de km).
+        _environment.FogDensity = 2e-5f * Mathf.Clamp(8000f / _camera.Distance, 0.03f, 1f);
         _hud.SetLive(DescribeLive());
     }
 
@@ -349,6 +474,14 @@ public partial class Main : Node3D
             (float)_radii.Overpressure140KPaM, (float)_radii.Overpressure35KPaM,
             (float)_radii.Overpressure7KPaM, (float)_radii.ThirdDegreeBurnsM));
         _groundMat.SetShaderParameter("radiation_radius", (float)_radii.Radiation500RadM);
+        _groundMat.SetShaderParameter("fallout_on", active && _fallout is not null ? 1f : 0f);
+        if (active && _fallout is { } f)
+        {
+            _groundMat.SetShaderParameter("fallout_tex", f.Texture);
+            _groundMat.SetShaderParameter("fallout_dir", f.Downwind);
+            _groundMat.SetShaderParameter("fallout_u", new Vector2(f.UMin, f.UMax));
+            _groundMat.SetShaderParameter("fallout_v", f.VHalf);
+        }
     }
 
     private void UpdateMarker()
@@ -363,20 +496,24 @@ public partial class Main : Node3D
     {
         string fps = $"{Engine.GetFramesPerSecond():0} img/s";
         if (_detonation is null || _profile is null || !_fx.Active)
-            return $"Point d'impact : ({_groundZero.X:0}, {_groundZero.Y:0}) m — cliquez sur la ville pour le déplacer\n{fps}";
+            return $"Point d'impact : ({_groundZero.X:0}, {_groundZero.Y:0}) m — cliquez sur la ville pour le déplacer\n" +
+                   $"Population présente : {_cityView.Tally.Population:N0} habitants\n{fps}";
         var tally = _cityView.Tally;
         double front = _fx.FrontRadius;
         string pressure = front < _profile.MaxRangeM * 0.98 ? Format.Pressure(_profile.At(front).OverpressurePa) : "—";
         string pause = _hud.Paused ? "   [PAUSE]" : "";
-        return $"{_detonation.Name}   T+{_time:0.00} s   ×{Format.Scale(_hud.TimeScale)}{pause}\n" +
+        return $"{_detonation.Name}   T+{Format.Duration(_time)}   ×{Format.Scale(_hud.TimeScale)}{pause}\n" +
                $"Front de choc : {Format.Distance(front)}   surpression {pressure}\n" +
                $"Bâtiments atteints : {tally.Hit} / {tally.Total}\n" +
                $"  effondrés {tally.Collapsed}   graves {tally.Severe}   modérés {tally.Moderate}   légers {tally.Light}\n" +
-               $"  en feu {tally.Burning}\n{fps}";
+               $"  en feu {tally.Burning}\n" +
+               $"Victimes : {tally.Deaths:N0} morts   {tally.Injured:N0} blessés   (sur {tally.Population:N0} présents)\n{fps}";
     }
 
-    private static string DescribeRadii(Detonation d, EffectRadii r)
+    private static string DescribeRadii(Detonation d, EffectRadii r, FalloutField? fallout)
     {
+        string falloutRow = fallout is null ? ""
+            : $"[color=#c070ff]●[/color] Retombées, 100 rad en 48 h : [b]{Format.Distance(fallout.Range100Rad48hM)}[/b] sous le vent\n";
         static string Row(string color, string label, double m) =>
             m > 0 ? $"[color={color}]●[/color] {label} : [b]{Format.Distance(m)}[/b]\n" : "";
         string yieldText = d.NuclearDevice is not null ? Format.Yield(d.YieldKt) : $"{Format.Mass(d.Charge!.TntEquivalentKg)} éq. TNT";
@@ -387,6 +524,6 @@ public partial class Main : Node3D
                Row("#fff070", "7 kPa — vitres, dégâts légers", r.Overpressure7KPaM) +
                Row("#ff5ad0", "Brûlures du 3e degré", r.ThirdDegreeBurnsM) +
                Row("#55ff77", "Radiation 500 rad", r.Radiation500RadM) +
-               Row("#bbbbbb", "Danger des éclats", r.FragmentHazardM);
+               Row("#bbbbbb", "Danger des éclats", r.FragmentHazardM) + falloutRow;
     }
 }

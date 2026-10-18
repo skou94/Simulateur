@@ -13,6 +13,7 @@ public sealed class RadialProfile
     private readonly double[] _arrival;
     private readonly double[] _thermal;
     private readonly double[] _radiation;
+    private readonly double[] _fragments;
 
     private RadialProfile(int n, double maxRangeM)
     {
@@ -23,6 +24,7 @@ public sealed class RadialProfile
         _arrival = new double[n];
         _thermal = new double[n];
         _radiation = new double[n];
+        _fragments = new double[n];
     }
 
     public double MaxRangeM { get; }
@@ -42,6 +44,7 @@ public sealed class RadialProfile
             p._arrival[i] = e.Blast.ArrivalTimeS;
             p._thermal[i] = e.ThermalFluenceCalPerCm2;
             p._radiation[i] = e.InitialRadiationRad;
+            p._fragments[i] = e.FragmentHitProbability;
         }
         // Le temps d'arrivée doit croître strictement pour pouvoir être inversé.
         for (int i = 1; i < samples; i++)
@@ -51,7 +54,7 @@ public sealed class RadialProfile
 
     public readonly record struct Sample(
         double OverpressurePa, double ImpulsePaS, double ArrivalTimeS,
-        double ThermalCalPerCm2, double RadiationRad);
+        double ThermalCalPerCm2, double RadiationRad, double FragmentHitProbability);
 
     public Sample At(double groundRangeM)
     {
@@ -61,7 +64,8 @@ public sealed class RadialProfile
             LerpLog(_impulse, i, t),
             Lerp(_arrival, i, t),
             LerpLog(_thermal, i, t),
-            LerpLog(_radiation, i, t));
+            LerpLog(_radiation, i, t),
+            Lerp(_fragments, i, t));
     }
 
     /// <summary>Rayon atteint par le front de choc au temps t (0 avant l'explosion).</summary>

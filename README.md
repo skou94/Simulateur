@@ -12,8 +12,9 @@ découle directement du calcul.
 
 ## Ce que fait le simulateur
 
-- **Une ville de 10 × 10 km à l'échelle réelle** : environ 41 000 bâtiments (tours en béton
-  et en acier au centre, immeubles en maçonnerie, maisons en bois en périphérie).
+- **Des villes à l'échelle réelle** : une ville générée de 10 × 10 km (environ 42 000
+  bâtiments) ou une **vraie ville téléchargée depuis OpenStreetMap** (Paris, Manhattan,
+  Londres, Hiroshima, Beyrouth) avec ses bâtiments, ses rues, son fleuve et ses parcs.
 - **Le souffle** : surpression, impulsion et temps d'arrivée de l'onde en tout point,
   avec la hauteur d'explosion (réflexion de l'onde sur le sol) et l'altitude du terrain.
 - **Les effets nucléaires** : flash, boule de feu, rayonnement thermique et brûlures,
@@ -23,8 +24,16 @@ découle directement du calcul.
   l'atteint ; son sort (intact, léger, modéré, grave, effondré) est tiré selon un modèle de
   vulnérabilité qui tient compte de la pression *et* de la durée de l'onde. Une grenade
   ne fait rien à un immeuble ; une onde nucléaire de même pression le rase.
-- **9 scénarios de référence** : grenade M67, bombe Mk 82, MOAB, explosion du port de
-  Beyrouth (2020), Hiroshima, Nagasaki, bombe à neutrons, ogive de 1,2 Mt, Tsar Bomba.
+- **L'estimation des victimes** : population tirée de la surface de plancher de chaque
+  bâtiment, de jour ou de nuit ; morts et blessés selon le souffle, l'effondrement, les
+  incendies, les brûlures et la radiation. Modèle calibré sur la mortalité observée à
+  Hiroshima selon la distance.
+- **Les retombées radioactives** (modèle WSEG-10) : panache poussé par le vent, dose
+  cumulée qui s'étend heure après heure, victimes recalculées selon l'abri qu'offre
+  chaque bâtiment. Nulles pour une explosion aérienne, majeures au sol.
+- **10 scénarios de référence** : grenade M67, bombe Mk 82, MOAB, explosion du port de
+  Beyrouth (2020), Hiroshima, Nagasaki, bombe à neutrons, ogive de 1,2 Mt, Tsar Bomba,
+  Castle Bravo.
 
 ## Prérequis
 
@@ -50,14 +59,22 @@ sont créées par le code au lancement.
 
 ## Utilisation
 
-1. Dans le panneau de droite, choisir un **scénario**, ou régler soi-même le type
-   d'engin, la puissance et la hauteur d'explosion.
-2. Cliquer sur la ville pour choisir le **point d'impact** (marqueur rouge).
-3. Cliquer sur **DÉTONER**.
+1. Choisir une **ville** : générée, ou réelle. Une ville réelle est téléchargée la
+   première fois (de 30 s à 2 min, connexion internet nécessaire), puis lue depuis le cache.
+2. Choisir un **scénario**, ou régler soi-même le type d'engin, la puissance et la
+   hauteur d'explosion ; régler le vent et le moment (jour ou nuit).
+3. Cliquer sur la ville pour choisir le **point d'impact** (marqueur rouge).
+4. Cliquer sur **DÉTONER**.
 
 Le panneau affiche alors les rayons d'effet (boule de feu, 140 / 35 / 7 kPa, brûlures du
-3ᵉ degré, radiation), et le coin supérieur gauche suit en direct le front de choc et le
-bilan des dégâts.
+3ᵉ degré, radiation, retombées), et le coin supérieur gauche suit en direct le front de
+choc, le bilan des dégâts et le nombre de victimes.
+
+Pour voir les retombées, choisir une explosion **au sol** (hauteur 0, par exemple Castle
+Bravo), dézoomer largement et accélérer le temps (×1 000 et plus) : elles arrivent en
+quelques heures. Les couleurs au sol indiquent la dose cumulée : jaune 1–10 rad, orange
+10–100, rouge 100–1 000, violet au-delà (dose mortelle pour la moitié des gens exposés
+sans abri : ~450 rad).
 
 ### Commandes
 
@@ -73,11 +90,14 @@ bilan des dégâts.
 
 | Réglage | Rôle |
 |---|---|
+| Ville | ville générée ou ville réelle OpenStreetMap |
 | Scénario | préréglage historique ou « Personnalisé » |
 | Type d'engin | fission, thermonucléaire, rayonnement renforcé ou TNT |
 | Puissance | de 10 t à 100 Mt (nucléaire), de 100 g à 5 000 t de TNT (conventionnel) |
 | Hauteur d'explosion | de 0 à 8 km (nucléaire), de 0 à 300 m (conventionnel) |
-| Vitesse du temps | de ×0,01 (ralenti) à ×100 ; utile pour les fortes puissances, dont l'onde met plusieurs minutes à traverser la ville |
+| Vitesse du temps | de ×0,01 (ralenti) à ×4 000 ; utile pour les fortes puissances et pour les retombées, qui se jouent sur des heures |
+| Vent | direction vers laquelle il souffle et vitesse : orientent et allongent le panache de retombées |
+| Moment de l'explosion | jour (gens au travail, 25 % dehors) ou nuit (gens chez eux, 4 % dehors) |
 | Afficher les zones d'effet | cercles au sol des seuils de dégâts |
 | Réinitialiser / Nouvelle ville | remet la ville en état / génère une autre ville |
 
@@ -92,7 +112,11 @@ Godot_v4.7.2-stable_mono_win64.exe --path BlastSim/godot -- --demo --scenario=5 
 | Option | Effet |
 |---|---|
 | `--demo` | déclenche le scénario sélectionné une seconde après le démarrage |
-| `--scenario=N` | 1 grenade, 2 Mk 82, 3 MOAB, 4 Beyrouth, 5 Hiroshima, 6 Nagasaki, 7 bombe à neutrons, 8 ogive 1,2 Mt, 9 Tsar Bomba |
+| `--scenario=N` | 1 grenade, 2 Mk 82, 3 MOAB, 4 Beyrouth, 5 Hiroshima, 6 Nagasaki, 7 bombe à neutrons, 8 ogive 1,2 Mt, 9 Tsar Bomba, 10 Castle Bravo |
+| `--custom=type,puissance,hauteur` | engin personnalisé ; type 0 fission, 1 thermonucléaire, 2 neutrons, 3 TNT ; puissance en kt (ou kg de TNT), hauteur en m |
+| `--city=N` | 1 Paris, 2 Manhattan, 3 Londres, 4 Hiroshima, 5 Beyrouth |
+| `--wind=direction,vitesse` | vent (degrés vers lesquels il souffle, m/s) |
+| `--night` | explosion de nuit |
 | `--time-scale=x` | vitesse du temps |
 | `--camera=distance,lacet,tangage` | position de la caméra (mètres, radians) |
 | `--benchmark=s` | affiche chaque seconde les images par seconde et les temps CPU/GPU, puis quitte après s secondes |
@@ -102,6 +126,7 @@ Godot_v4.7.2-stable_mono_win64.exe --path BlastSim/godot -- --demo --scenario=5 
 ```
 BlastSim/
 ├── src/BlastPhysics/          moteur physique (bibliothèque C#, sans dépendance graphique)
+├── src/CityData/              villes réelles OpenStreetMap (téléchargement, conversion, carte au sol)
 ├── tests/BlastPhysics.Tests/  tests de cohérence physique et de validation historique
 ├── godot/                     simulateur 3D (scripts C# et shaders)
 └── README.md                  documentation technique des modèles physiques
@@ -120,16 +145,18 @@ Console.WriteLine(effets.Blast.OverpressurePa);  // ≈ 32 600 Pa
 
 Les modèles viennent de sources de référence : modèle de souffle DNA (BLAST.EXE), loi de
 Kinney-Graham pour le TNT, *The Effects of Nuclear Weapons* de Glasstone & Dolan pour le
-thermique et la radiation, critères DoD pour les éclats. Les 37 tests automatiques
-vérifient notamment :
+thermique et la radiation, critères DoD pour les éclats, WSEG-10 pour les retombées,
+HAZUS pour les victimes par état de dégât. Les 63 tests automatiques vérifient notamment :
 
 | Cas | Calculé | Référence |
 |---|---|---|
 | Hiroshima, rayon à 35 kPa (destruction de la plupart des bâtiments) | 1,53 km | ~1,6–1,8 km |
-| Hiroshima, dose de 500 rad | 1,33 km | ~1,2–1,4 km |
+| Hiroshima, dose de 500 rad | 1,15 km | ~1,0–1,3 km (dosimétrie DS02) |
+| Hiroshima, mortalité à 1,5 km / 2 km / 3 km | 53 % / 17 % / ~0 % | ~50–60 % / 20–30 % / quelques % |
 | Ogive de 1,2 Mt, rayon à 35 kPa | 6,5 km | ~6,4 km |
 | Trinity, rayon de la boule de feu à 25 ms | ~138 m | 130 m (analyse de G. I. Taylor) |
 | Grenade M67, rayon de danger des éclats | 16 m | 15 m |
+| Castle Bravo, dose sur 48 h à 180 km sous le vent | ~1 200 rad (dans l'axe) | Rongelap : ~190 rad (hors de l'axe) |
 
 Pour lancer les tests :
 
@@ -138,10 +165,11 @@ cd BlastSim
 dotnet test
 ```
 
-**Limites connues** : sol plat (pas d'effet d'écran des bâtiments), ville générée et non
-réelle, seuils de dégâts aux bâtiments indicatifs, pas encore de retombées radioactives
-ni d'estimation des victimes. Le détail des modèles, des écarts volontaires et des
-limites se trouve dans [BlastSim/README.md](BlastSim/README.md).
+**Limites connues** : sol plat (pas d'effet d'écran des bâtiments) ; bâtiments OSM
+approchés par des rectangles de même surface ; seuils de dégâts aux bâtiments indicatifs ;
+bilan des victimes précis à un facteur ~1,5 ; retombées « cas moyen » (WSEG-10), sans
+relief ni pluie, précises à un facteur ~3. Le détail des modèles, des écarts volontaires
+et des limites se trouve dans [BlastSim/README.md](BlastSim/README.md).
 
 ## Performances
 
@@ -150,6 +178,9 @@ la scène, y compris quand toute la ville s'effondre en même temps.
 
 ## Crédits
 
-Le portage du modèle de souffle DNA et des courbes de radiation s'appuie sur la
-bibliothèque [glasstone](https://github.com/GOFAI/glasstone) (licence MIT) ; voir
-[BlastSim/THIRD_PARTY_NOTICES.md](BlastSim/THIRD_PARTY_NOTICES.md).
+Le portage du modèle de souffle DNA, des courbes de radiation et du modèle de retombées
+WSEG-10 s'appuie sur la bibliothèque [glasstone](https://github.com/GOFAI/glasstone)
+(licence MIT) ; voir [BlastSim/THIRD_PARTY_NOTICES.md](BlastSim/THIRD_PARTY_NOTICES.md).
+
+Les villes réelles utilisent les données © les contributeurs d'OpenStreetMap, sous
+licence ODbL (https://www.openstreetmap.org/copyright), téléchargées via l'API Overpass.

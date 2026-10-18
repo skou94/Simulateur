@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using BlastPhysics;
+using BlastPhysics.Casualties;
 using BlastPhysics.Conventional;
 using BlastPhysics.Nuclear;
 using Godot;
@@ -14,20 +15,27 @@ public partial class Hud : CanvasLayer
     public event Action? ResetRequested;
     public event Action? NewCityRequested;
     public event Action<bool>? ZonesToggled;
+    public event Action<TimeOfDay>? TimeOfDayChanged;
+    public event Action<int>? CitySelected;
 
     private const int CustomIndex = 0;
     private static readonly string[] ModeNames =
         { "Nucléaire — fission", "Nucléaire — thermonucléaire", "Nucléaire — rayonnement renforcé", "Conventionnel — TNT" };
 
-    private OptionButton _scenario = null!, _mode = null!;
-    private HSlider _yield = null!, _height = null!, _time = null!;
-    private Label _yieldLabel = null!, _heightLabel = null!, _timeLabel = null!;
+    private OptionButton _scenario = null!, _mode = null!, _moment = null!, _cityChoice = null!;
+    private Label _cityStatus = null!, _attribution = null!;
+    private HSlider _yield = null!, _height = null!, _time = null!, _windDir = null!, _windSpeed = null!;
+    private Label _yieldLabel = null!, _heightLabel = null!, _timeLabel = null!, _windLabel = null!;
     private RichTextLabel _info = null!;
     private Label _live = null!;
     private ColorRect _flash = null!;
     private bool _applyingPreset;
 
     public double TimeScale => Math.Pow(10.0, _time.Value);
+
+    /// <summary>Direction vers laquelle souffle le vent (0 = nord, 90 = est).</summary>
+    public double WindTowardDeg => _windDir.Value;
+    public double WindSpeedMs => _windSpeed.Value;
     public bool Paused { get; set; }
 
     private bool IsConventional => _mode.Selected == 3;
@@ -58,6 +66,16 @@ public partial class Hud : CanvasLayer
         title.AddThemeColorOverride("font_color", new Color(1f, 0.62f, 0.25f));
         box.AddChild(title);
 
+        box.AddChild(Caption("Ville"));
+        _cityChoice = new OptionButton();
+        _cityChoice.AddItem("Ville procédurale (10 × 10 km)");
+        foreach (var preset in CityData.CityPresets.All) _cityChoice.AddItem($"{preset.Name} (OSM)");
+        _cityChoice.ItemSelected += i => CitySelected?.Invoke((int)i);
+        box.AddChild(_cityChoice);
+        _cityStatus = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart, Modulate = new Color(1f, 0.8f, 0.4f) };
+        _cityStatus.AddThemeFontSizeOverride("font_size", 13);
+        box.AddChild(_cityStatus);
+
         box.AddChild(Caption("Scénario"));
         _scenario = new OptionButton();
         _scenario.AddItem("Personnalisé");
@@ -74,10 +92,24 @@ public partial class Hud : CanvasLayer
         (_yieldLabel, _yield) = AddSlider(box, 0, 1000, 470);
         (_heightLabel, _height) = AddSlider(box, 0, 1000, 270);
         box.AddChild(new HSeparator());
-        (_timeLabel, _time) = AddSlider(box, -2.0, 2.0, 0.0, step: 0.01);
+        // Jusqu'à ×4 000 : les retombées se jouent sur des heures.
+        (_timeLabel, _time) = AddSlider(box, -2.0, 3.6, 0.0, step: 0.01);
+        (_windLabel, _windDir) = AddSlider(box, 0, 355, 90, step: 5);
+        _windSpeed = new HSlider { MinValue = 0.5, MaxValue = 30, Step = 0.5, Value = 7 };
+        box.AddChild(_windSpeed);
+        _windDir.ValueChanged += _ => RefreshLabels();
+        _windSpeed.ValueChanged += _ => RefreshLabels();
         _yield.ValueChanged += _ => { RefreshLabels(); MarkCustom(); };
         _height.ValueChanged += _ => { RefreshLabels(); MarkCustom(); };
         _time.ValueChanged += _ => RefreshLabels();
+
+        box.AddChild(Caption("Moment de l'explosion"));
+        var moment = new OptionButton();
+        moment.AddItem("Jour (population au travail, 25 % dehors)");
+        moment.AddItem("Nuit (population chez elle, 4 % dehors)");
+        moment.ItemSelected += i => TimeOfDayChanged?.Invoke(i == 0 ? TimeOfDay.Day : TimeOfDay.Night);
+        box.AddChild(moment);
+        _moment = moment;
 
         var zones = new CheckBox { Text = "Afficher les zones d'effet", ButtonPressed = true };
         zones.Toggled += on => ZonesToggled?.Invoke(on);
@@ -110,6 +142,14 @@ public partial class Hud : CanvasLayer
         help.AddThemeFontSizeOverride("font_size", 13);
         box.AddChild(help);
 
+        _attribution = new Label { Modulate = new Color(1, 1, 1, 0.75f) };
+        _attribution.AddThemeFontSizeOverride("font_size", 12);
+        _attribution.SetAnchorsPreset(Control.LayoutPreset.BottomLeft);
+        _attribution.OffsetLeft = 12;
+        _attribution.OffsetTop = -28;
+        _attribution.OffsetBottom = -8;
+        AddChild(_attribution);
+
         _live = new Label { Position = new Vector2(20, 16) };
         _live.AddThemeFontSizeOverride("font_size", 17);
         _live.AddThemeColorOverride("font_outline_color", Colors.Black);
@@ -127,7 +167,42 @@ public partial class Hud : CanvasLayer
         OnScenarioSelected(_scenario.Selected);
     }
 
-    public void SetTimeScale(double scale) => _time.Value = Math.Log10(Math.Clamp(scale, 0.01, 100.0));
+    public void SelectTimeOfDay(TimeOfDay time)
+    {
+        _moment.Select(time == TimeOfDay.Day ? 0 : 1);
+        TimeOfDayChanged?.Invoke(time);
+    }
+
+    public void SelectCity(int index)
+    {
+        _cityChoice.Select(Math.Clamp(index, 0, CityData.CityPresets.All.Count));
+        if (index != 0) CitySelected?.Invoke(_cityChoice.Selected);
+    }
+
+    public void SetCityStatus(string text) => _cityStatus.Text = text;
+
+    public void SetAttribution(string text) => _attribution.Text = text;
+
+    /// <summary>Engin personnalisé : type (rang dans la liste), puissance (kt ou kg de TNT), hauteur (m).</summary>
+    public void SetCustom(int mode, double yieldValue, double heightM)
+    {
+        _scenario.Select(CustomIndex);
+        _mode.Select(Math.Clamp(mode, 0, ModeNames.Length - 1));
+        _yield.Value = IsConventional
+            ? (Math.Log10(yieldValue) + 1.0) / 7.7 * 1000.0
+            : (Math.Log10(yieldValue) + 2.0) / 7.0 * 1000.0;
+        _height.Value = Math.Sqrt(heightM / (IsConventional ? 300.0 : 8000.0)) * 1000.0;
+        _scenario.Select(CustomIndex);
+        RefreshLabels();
+    }
+
+    public void SetWind(double towardDeg, double speedMs)
+    {
+        _windDir.Value = towardDeg;
+        _windSpeed.Value = speedMs;
+    }
+
+    public void SetTimeScale(double scale) => _time.Value = Math.Log10(Math.Clamp(scale, 0.01, 4000.0));
 
     public void SetFlash(float alpha) => _flash.Color = _flash.Color with { A = Mathf.Clamp(alpha, 0f, 1f) };
     public void SetInfo(string bbcode) => _info.Text = bbcode;
@@ -195,6 +270,7 @@ public partial class Hud : CanvasLayer
             : $"Puissance : {Format.Yield(YieldValue)}";
         _heightLabel.Text = $"Hauteur d'explosion : {Format.Distance(HeightM)}";
         _timeLabel.Text = $"Vitesse du temps : ×{Format.Scale(TimeScale)}";
+        _windLabel.Text = $"Vent vers {Format.Compass(WindTowardDeg)} : {WindSpeedMs:0.#} m/s ({WindSpeedMs * 3.6:0} km/h)";
     }
 
     private static Label Caption(string text)
@@ -226,6 +302,17 @@ public static class Format
     public static string Mass(double kg) => kg >= 1000 ? $"{kg / 1000:0.##} t" : kg >= 1 ? $"{kg:0.#} kg" : $"{kg * 1000:0} g";
 
     public static string Pressure(double pa) => pa >= 1e6 ? $"{pa / 1e6:0.#} MPa" : $"{pa / 1000:0.#} kPa";
+
+    public static string Compass(double deg)
+    {
+        string[] names = { "le nord", "le nord-est", "l'est", "le sud-est", "le sud", "le sud-ouest", "l'ouest", "le nord-ouest" };
+        return $"{names[(int)Math.Round(deg / 45.0) % 8]} ({deg:0}°)";
+    }
+
+    /// <summary>Durée lisible : secondes, puis minutes, puis heures.</summary>
+    public static string Duration(double s) => s < 120 ? $"{s:0.00} s"
+        : s < 7200 ? $"{(int)(s / 60)} min {(int)(s % 60):00} s"
+        : $"{(int)(s / 3600)} h {(int)(s % 3600 / 60):00} min";
 
     public static string Scale(double s) => s >= 10 ? $"{s:0}" : s >= 1 ? $"{s:0.#}" : $"{s:0.###}";
 }

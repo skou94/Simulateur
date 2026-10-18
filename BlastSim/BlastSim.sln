@@ -11,6 +11,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{DCD74823
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlastPhysics.Tests", "tests\BlastPhysics.Tests\BlastPhysics.Tests.csproj", "{FA5747DC-A603-4A75-97AA-3B064CD8ABC1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CityData", "src\CityData\CityData.csproj", "{3F841FBD-E91B-407D-8804-3BE97B7D2D63}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -28,9 +30,14 @@ Global
 		{FA5747DC-A603-4A75-97AA-3B064CD8ABC1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FA5747DC-A603-4A75-97AA-3B064CD8ABC1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FA5747DC-A603-4A75-97AA-3B064CD8ABC1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3F841FBD-E91B-407D-8804-3BE97B7D2D63}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3F841FBD-E91B-407D-8804-3BE97B7D2D63}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3F841FBD-E91B-407D-8804-3BE97B7D2D63}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3F841FBD-E91B-407D-8804-3BE97B7D2D63}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{9517AFA7-8570-42D3-8F3D-E759DE9458F2} = {6EDABBF1-B2EE-45DC-BAF3-1BA6ADECDB75}
 		{FA5747DC-A603-4A75-97AA-3B064CD8ABC1} = {DCD74823-0F27-4FE9-970C-A027B8CE5D71}
+		{3F841FBD-E91B-407D-8804-3BE97B7D2D63} = {6EDABBF1-B2EE-45DC-BAF3-1BA6ADECDB75}
 	EndGlobalSection
 EndGlobal

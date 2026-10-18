@@ -10,6 +10,7 @@ bibliothèque Python [glasstone](https://github.com/GOFAI/glasstone) :
 - `src/BlastPhysics/Blast/GroundReflection.cs`
 - `src/BlastPhysics/Nuclear/RadiationTables.cs`
 - `src/BlastPhysics/Nuclear/InitialRadiation.cs`
+- `src/BlastPhysics/Nuclear/Fallout.cs` (modèle WSEG-10)
 
 ```
 The MIT License (MIT)
@@ -34,3 +35,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## OpenStreetMap
+
+Les villes réelles sont construites à partir des données OpenStreetMap,
+© les contributeurs d'OpenStreetMap, disponibles sous licence Open Database License
+(ODbL) : https://www.openstreetmap.org/copyright. Le simulateur les télécharge à la
+demande via l'API Overpass et ne les redistribue pas dans ce dépôt.

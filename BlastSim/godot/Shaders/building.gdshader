@@ -4,6 +4,9 @@ shader_type spatial;
 
 #include "res://Shaders/noise.gdshaderinc"
 
+// 1 la nuit : une partie des fenêtres est éclairée, jusqu'à ce que le souffle coupe le courant.
+uniform float night = 0.0;
+
 varying vec4 state;
 varying vec3 world_pos;
 varying vec3 world_normal;
@@ -40,6 +43,8 @@ void fragment() {
 			metal = mix(0.5, 0.0, broken);
 			float flicker = 0.6 + 0.4 * sin(TIME * (6.0 + 5.0 * h) + h * 40.0);
 			emission = vec3(1.0, 0.42, 0.08) * fire * flicker * (0.5 + h) * 9.0;
+			float lit = step(0.55, hash12(floor(g) * 1.37 + seed * 31.0)) * (1.0 - broken) * (1.0 - fire);
+			emission += vec3(1.0, 0.78, 0.48) * lit * night * (0.8 + 0.6 * h);
 		}
 	} else {
 		albedo *= 0.75;

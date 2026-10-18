@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\src\BlastPhysics\BlastPhysics.csproj" />
+    <ProjectReference Include="..\src\CityData\CityData.csproj" />
   </ItemGroup>
 </Project>
