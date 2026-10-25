@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using BlastPhysics;
 using BlastPhysics.Casualties;
 using BlastPhysics.Damage;
+using BlastPhysics.Fire;
 using BlastPhysics.Nuclear;
 using Godot;
 
@@ -10,7 +11,7 @@ namespace BlastSimGame;
 
 /// <summary>Bilan des dégâts affiché dans l'interface.</summary>
 public readonly record struct DamageTally(
-    int Total, int Hit, int Light, int Moderate, int Severe, int Collapsed, int Burning,
+    int Total, int Hit, int Light, int Moderate, int Severe, int Collapsed, int Burning, int BurnedOut,
     double Population, double Deaths, double Injured);
 
 /// <summary>Tout ce qu'on sait d'un bâtiment à l'instant présent, pour la fiche affichée au clic.</summary>
@@ -56,11 +57,10 @@ public partial class CityView : MultiMeshInstance3D
         public RadialProfile.Sample Load;
         public DamageState Damage;
         public bool BlastResolved;
-        public bool Burning;
+        public bool Burning, BurnedOut;
         public float CurrentHeight, TargetHeight, StartHeight;
         public float Tilt, TargetTilt;
         public double AnimStart, AnimDuration;
-        public double FireStart;
         public float Fire, Char, Broken;
         public float FalloutRad, InducedRad;
         public bool Vaporized;
@@ -74,7 +74,12 @@ public partial class CityView : MultiMeshInstance3D
     private int[] _byArrival = Array.Empty<int>();
     private int _nextArrival;
     private readonly List<int> _animating = new();
-    private readonly List<int> _igniting = new();
+    // Incendies : moteur de propagation, bâtiments en feu, tampons d'événements.
+    private FireSpread? _fire;
+    private readonly List<int> _fireActive = new(), _fireIgnited = new(), _fireOut = new();
+    private int _burnedOut;
+    private const double FireGrowS = 600.0;   // un bâtiment s'embrase en ~10 min
+    private const double FireDecayS = 1200.0; // et décline sur ~20 min avant de s'éteindre
     private RadialProfile? _profile;
     private double _thermalTimeS;
     private bool _thermalDone;
@@ -106,7 +111,7 @@ public partial class CityView : MultiMeshInstance3D
     private float[] _cosYaw = Array.Empty<float>(), _sinYaw = Array.Empty<float>();
     private float[] _tiltAxisX = Array.Empty<float>(), _tiltAxisZ = Array.Empty<float>();
 
-    public DamageTally Tally => new(_state.Length, _hit, _light, _moderate, _severe, _collapsed, _burning,
+    public DamageTally Tally => new(_state.Length, _hit, _light, _moderate, _severe, _collapsed, _burning, _burnedOut,
                                     _population, _deathTotal, _injuredTotal);
 
     public void Build(CityModel city)
@@ -154,8 +159,10 @@ public partial class CityView : MultiMeshInstance3D
         _hasFallout = _hasInduced = false;
         _thermalDone = false;
         _animating.Clear();
-        _igniting.Clear();
-        _hit = _light = _moderate = _severe = _collapsed = _burning = 0;
+        _fire = null;
+        _fireTask = null;
+        _fireActive.Clear();
+        _hit = _light = _moderate = _severe = _collapsed = _burning = _burnedOut = 0;
         _population = _deathTotal = _injuredTotal = 0;
         for (int i = 0; i < _state.Length; i++)
         {
@@ -283,6 +290,15 @@ public partial class CityView : MultiMeshInstance3D
     // Vrai tant que les ombres de l'éclair ne sont pas prêtes ; les applique dès qu'elles le sont.
     private bool WaitingForThermalShadow()
     {
+        if (_fireTask is not null)
+        {
+            if (!_fireTask.IsCompleted) return true;
+            _fire = _fireTask.Result;
+            // Vent modifié pendant la construction du graphe : appliqué dès qu'il est prêt.
+            if (_pendingWind is { } w) _fire.SetWind(w.Speed, w.Toward, w.Time);
+            _pendingWind = null;
+            _fireTask = null;
+        }
         if (_thermalShadow is null) return false;
         if (!_thermalShadow.IsCompleted) return true;
         var (facade, street) = _thermalShadow.Result;
@@ -332,25 +348,114 @@ public partial class CityView : MultiMeshInstance3D
             if (u >= 1.0) RemoveSwap(_animating, k);
         }
 
-        for (int k = _igniting.Count - 1; k >= 0; k--)
-        {
-            int i = _igniting[k];
-            ref var s = ref _state[i];
-            if (t < s.FireStart) continue;
-            if (!s.Burning)
-            {
-                s.Burning = true;
-                _burning++;
-                if (s.BlastResolved) UpdateCasualties(i);
-            }
-            s.Fire = (float)Math.Clamp((t - s.FireStart) / 20.0, 0.0, 1.0);
-            WriteCustom(i);
-            if (s.Fire >= 1f) RemoveSwap(_igniting, k);
-        }
+        if (_fire is not null) UpdateFires(t);
 
         if (_hasFallout || _hasInduced) UpdateResidual(t);
 
         Flush();
+    }
+
+    /// <summary>
+    /// Démarre la propagation des incendies pour la détonation en cours, avec le vent du
+    /// moment (à appeler après <see cref="Prepare"/>).
+    /// </summary>
+    private (double Speed, double Toward, double Time)? _pendingWind;
+
+    /// <summary>Change le vent pendant l'incendie : la suite de la propagation en tient compte.</summary>
+    public void SetWind(double windSpeedMs, double windTowardDeg, double timeS)
+    {
+        if (_fire is not null) _fire.SetWind(windSpeedMs, windTowardDeg, timeS);
+        else if (_fireTask is not null) _pendingWind = (windSpeedMs, windTowardDeg, timeS);
+    }
+
+    public void StartFires(double windSpeedMs, double windTowardDeg)
+    {
+        var sites = new FireSite[_state.Length];
+        for (int i = 0; i < sites.Length; i++)
+        {
+            var b = _city.Buildings[i];
+            sites[i] = new FireSite(b.X, b.Z, b.Width, b.Depth, b.Structure);
+        }
+        int seed = (int)(_city.Buildings.Count * 7919L % int.MaxValue);
+        // Graphe de voisinage (~75 ms pour 40 000 bâtiments) construit en tâche de fond,
+        // comme les ombres de l'éclair ; Simulate attend qu'il soit prêt.
+        _fireTask = System.Threading.Tasks.Task.Run(() => new FireSpread(sites, windSpeedMs, windTowardDeg, seed));
+    }
+
+    private System.Threading.Tasks.Task<FireSpread>? _fireTask;
+
+    /// <summary>Incendies visibles (intensité notable), pour les flammes et la fumée.</summary>
+    public int CollectFires(FireInstance[] dst)
+    {
+        int n = 0;
+        foreach (int i in _fireActive)
+        {
+            ref var s = ref _state[i];
+            if (s.Fire < 0.03f || s.Vaporized) continue;
+            var b = _city.Buildings[i];
+            dst[n++] = new FireInstance(new Vector3(b.X, MathF.Max(s.CurrentHeight, 0.5f), b.Z),
+                                        MathF.Sqrt(b.Width * b.Depth), s.Fire, b.Seed);
+            if (n == dst.Length) break;
+        }
+        return n;
+    }
+
+    private void UpdateFires(double t)
+    {
+        _fireIgnited.Clear();
+        _fireOut.Clear();
+        _fire!.Advance(t, _fireIgnited, _fireOut);
+        foreach (int i in _fireIgnited)
+        {
+            ref var s = ref _state[i];
+            if (s.Vaporized) continue;
+            s.Burning = true;
+            _burning++;
+            _fireActive.Add(i);
+            if (s.BlastResolved) UpdateCasualties(i);
+        }
+        foreach (int i in _fireOut)
+        {
+            ref var s = ref _state[i];
+            if (!s.Burning) continue;
+            s.Burning = false;
+            s.BurnedOut = true;
+            _burning--;
+            _burnedOut++;
+            s.Char = 1f;
+            BurnDown(i, t);
+        }
+        // Intensité : embrasement, plein feu, déclin.
+        for (int k = _fireActive.Count - 1; k >= 0; k--)
+        {
+            int i = _fireActive[k];
+            ref var s = ref _state[i];
+            double ti = _fire.IgnitionTime(i), te = _fire.BurnoutTime(i);
+            s.Fire = (float)(Math.Clamp((t - ti) / FireGrowS, 0.0, 1.0) * Math.Clamp((te - t) / FireDecayS, 0.0, 1.0));
+            WriteCustom(i);
+            if (t >= te) RemoveSwap(_fireActive, k);
+        }
+    }
+
+    // Charpente et planchers brûlés : une maison en bois s'affaisse, un immeuble de
+    // maçonnerie perd toitures et planchers ; le béton et l'acier restent debout, vidés.
+    private void BurnDown(int i, double t)
+    {
+        ref var s = ref _state[i];
+        var b = _city.Buildings[i];
+        float keep = b.Structure switch
+        {
+            StructureType.WoodFrame => 0.25f,
+            StructureType.UnreinforcedMasonry => 0.7f,
+            _ => 1f,
+        };
+        float target = Math.Min(s.TargetHeight, b.Height * keep);
+        if (target >= s.CurrentHeight - 0.1f) return;
+        s.StartHeight = s.CurrentHeight;
+        s.TargetHeight = target;
+        s.AnimStart = t;
+        s.AnimDuration = 300.0;
+        if (!_animating.Contains(i)) _animating.Add(i);
     }
 
     private void Flush()
@@ -377,9 +482,9 @@ public partial class CityView : MultiMeshInstance3D
             s.Char = (float)Math.Clamp((q - CharStartCalPerCm2) / (CharFullCalPerCm2 - CharStartCalPerCm2), 0.0, 1.0);
             if (q >= IgnitionThreshold(_city.Buildings[i].Structure))
             {
-                // Départs de feu étalés : les foyers mettent du temps à prendre.
-                s.FireStart = t + 2.0 + 30.0 * Hash(i, 3);
-                _igniting.Add(i);
+                // Départs de feu étalés : les foyers mettent du temps à prendre ;
+                // ils se propagent ensuite d'un bâtiment à l'autre.
+                _fire?.Ignite(i, t + 2.0 + 30.0 * Hash(i, 3));
             }
             if (s.Char > 0) WriteCustom(i);
         }
@@ -464,7 +569,7 @@ public partial class CityView : MultiMeshInstance3D
                                     s.Load.RadiationRad, s.FalloutRad + s.InducedRad, s.Load.FragmentHitProbability);
         var risk = s.Distance < _craterRadius
             ? new CasualtyRisk(1.0, 0.0)
-            : CasualtyModel.Occupant(b.Structure, s.Damage, s.Burning, exposure, TimeOfDay);
+            : CasualtyModel.Occupant(b.Structure, s.Damage, s.Burning || s.BurnedOut, exposure, TimeOfDay);
         double deaths = _occupants[i] * risk.Death, injured = _occupants[i] * risk.Injury;
         _deathTotal += deaths - _deaths[i];
         _injuredTotal += injured - _injured[i];

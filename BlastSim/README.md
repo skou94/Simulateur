@@ -71,6 +71,7 @@ dotnet test        # lance la suite de tests
 | Cratère | R ≈ R1·W^(1/3.4) (nucléaire), D ≈ 0.8·W^(1/3) (chimique), réduit avec la hauteur | Glasstone & Dolan §6.70 ; Ambrosini et al. 2002 | facteur ~2 |
 | Radioactivité induite | ²⁸Al, ⁵⁶Mn, ²⁴Na proportionnels à la dose neutronique, calibrés sur Hiroshima | Glasstone & Dolan §9.31-9.37 ; DS86/DS02 | facteur ~3 |
 | Effet d'écran (jeu) | Éclair : lignes de visée vers la boule de feu ; souffle : jusqu'à −50 % derrière un obstacle, pondéré par H/(H+2L) | Glasstone ch. 7 ; UFC 3-340-02 | souffle : approché |
+| Propagation des incendies | Allumage des voisins à délai exponentiel : écart entre façades, inflammabilité, vent ; durée de combustion | Ordres de grandeur du modèle de Hamada (~100-200 m/h en ville de bois) | facteur ~2 |
 | Victimes | Risques indépendants (état du bâtiment, incendie, souffle, brûlures, radiation, éclats), DL50 450 rad | HAZUS-MH ; Glasstone ch. 12 ; calibré sur Oughterson & Warren 1956 | facteur ~1.5 |
 | Retombées | WSEG-10, décroissance t^-1.2, protection des bâtiments | Hanifen 1980 ; FEMA (facteurs de protection) | facteur ~3 |
 

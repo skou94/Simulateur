@@ -30,6 +30,7 @@ public partial class Main : Node3D
     private ExplosionView _fx = null!;
     private FalloutField? _fallout;
     private CraterView _crater = null!;
+    private FireView _fires = null!;
     private Vector2 _groundZero = Vector2.Zero;
     private MeshInstance3D _marker = null!;
     private double _time;
@@ -75,6 +76,8 @@ public partial class Main : Node3D
         AddChild(_fx);
         _crater = new CraterView();
         AddChild(_crater);
+        _fires = new FireView();
+        AddChild(_fires);
         StartShaderWarmup();
 
         _marker = new MeshInstance3D
@@ -172,6 +175,20 @@ public partial class Main : Node3D
                     break;
                 case "no-shielding":
                     _hud.ShieldingEnabled = false;
+                    break;
+                case "wind-later":
+                    // --wind-later=secondes,direction,vitesse : change le vent en cours de route (tests).
+                    var wl = value.Split(',');
+                    GetTree().CreateTimer(double.Parse(wl[0], inv)).Timeout +=
+                        () => _hud.SetWind(double.Parse(wl[1], inv), double.Parse(wl[2], inv));
+                    break;
+                case "charts":
+                    _hud.ShowCharts();
+                    break;
+                case "previous":
+                    // --previous=N : courbes d'un scénario de comparaison, avant la détonation.
+                    var prev = Scenarios.All[int.Parse(value, inv) - 1]();
+                    _hud.SetCharts(ChartData.From(prev, Math.Max(prev.ComputeRadii().Overpressure7KPaM * 3, 2000), TimeOfDay.Day));
                     break;
                 case "night":
                     _hud.SelectTimeOfDay(TimeOfDay.Night);
@@ -462,7 +479,10 @@ public partial class Main : Node3D
             : null;
         _cityView.Prepare(_profile, _groundZero, _thermalTime, casualty, _detonation.Crater.RadiusM,
                           fireballCenter, _hud.ShieldingEnabled);
-        Mark("CityView.Prepare (dont écran)");
+        if (_detonation.Thermal is not null) _cityView.StartFires(_hud.WindSpeedMs, _hud.WindTowardDeg);
+        ApplyWindToFireVisuals();
+        _appliedWind = (_hud.WindSpeedMs, _hud.WindTowardDeg);
+        Mark("CityView.Prepare (dont écran et incendies)");
         _crater.Display(_detonation.Crater, _groundZero);
         _fallout = null;
         if (_detonation.NuclearDevice is { } device)
@@ -477,6 +497,8 @@ public partial class Main : Node3D
         _fx.Position = new Vector3(_groundZero.X, 0f, _groundZero.Y);
         PushCloudLighting();
         _fx.Setup(_detonation, _profile, _radii);
+        _hud.SetCharts(ChartData.From(_detonation, Math.Max(_radii.Overpressure7KPaM * 3, 2000), _cityView.TimeOfDay));
+        Mark("Courbes");
         Mark("ExplosionView.Setup");
         _time = 0.0;
         _cameraShaken = false;
@@ -489,6 +511,7 @@ public partial class Main : Node3D
     {
         _fx.Deactivate();
         _crater.Clear();
+        _fires.Clear();
         _fallout = null;
         _detonation = null;
         _profile = null;
@@ -565,6 +588,8 @@ public partial class Main : Node3D
             _lastFxMs = _probe.Elapsed.TotalMilliseconds;
             _fallout?.Update(_time / 3600.0);
             _crater.Update(_time);
+            _fires.Update(_cityView);
+            FollowWindChanges(delta);
             UpdateFlash();
             ShakeCameraWhenFrontPasses();
         }
@@ -598,6 +623,31 @@ public partial class Main : Node3D
         _environment.TonemapExposure = 1f + 5f * seen;
         _environment.GlowIntensity = 0.9f + 2.5f * seen;
         _hud.SetFlash(Mathf.Clamp(seen * seen * 1.2f, 0f, 0.85f));
+    }
+
+    // Vent modifié en cours de simulation : la propagation des incendies et l'inclinaison de
+    // la fumée suivent (au plus 5 fois par seconde, le curseur envoyant beaucoup de valeurs).
+    // Les retombées gardent le vent de la détonation : WSEG-10 suppose un vent constant.
+    private (double Speed, double Toward) _appliedWind;
+    private double _windCheck;
+
+    private void FollowWindChanges(double delta)
+    {
+        _windCheck -= delta;
+        if (_windCheck > 0) return;
+        _windCheck = 0.2;
+        var wind = (_hud.WindSpeedMs, _hud.WindTowardDeg);
+        if (wind == _appliedWind) return;
+        _appliedWind = wind;
+        _cityView.SetWind(wind.Item1, wind.Item2, _time);
+        ApplyWindToFireVisuals();
+    }
+
+    private void ApplyWindToFireVisuals()
+    {
+        float a = Mathf.DegToRad((float)_hud.WindTowardDeg);
+        _fires.SetConditions(new Vector3(Mathf.Sin(a), 0f, -Mathf.Cos(a)), (float)_hud.WindSpeedMs,
+                             _cityView.TimeOfDay == TimeOfDay.Night ? 0.15f : 1f);
     }
 
     private void ShakeCameraWhenFrontPasses()
@@ -660,7 +710,7 @@ public partial class Main : Node3D
                $"Front de choc : {Format.Distance(front)}   surpression {pressure}\n" +
                $"Bâtiments atteints : {tally.Hit} / {tally.Total}\n" +
                $"  effondrés {tally.Collapsed}   graves {tally.Severe}   modérés {tally.Moderate}   légers {tally.Light}\n" +
-               $"  en feu {tally.Burning}\n" +
+               $"  en feu {tally.Burning}   brûlés {tally.BurnedOut}\n" +
                $"Victimes : {tally.Deaths:N0} morts   {tally.Injured:N0} blessés   (sur {tally.Population:N0} présents)\n" +
                DescribeFallout() + fps;
     }

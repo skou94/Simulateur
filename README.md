@@ -1,5 +1,7 @@
 # BlastSim — simulateur d'explosions
 
+[![Tests](https://github.com/skou94/Simulateur/actions/workflows/tests.yml/badge.svg)](https://github.com/skou94/Simulateur/actions/workflows/tests.yml)
+
 Simulateur 3D des effets d'une explosion sur une ville, de la grenade à la Tsar Bomba.
 Le rendu (Godot 4) est entièrement piloté par un moteur physique en C# fondé sur des
 modèles publiés et validés contre des données historiques : ce que l'on voit à l'écran
@@ -31,6 +33,10 @@ découle directement du calcul.
 - **Les retombées radioactives** (modèle WSEG-10) : panache poussé par le vent, dose
   cumulée qui s'étend heure après heure, victimes recalculées selon l'abri qu'offre
   chaque bâtiment. Nulles pour une explosion aérienne, majeures au sol.
+- **La propagation des incendies** de bâtiment en bâtiment, poussée par le vent, freinée
+  par les rues larges et les constructions en béton ; les bâtiments brûlent puis s'éteignent.
+- **Des courbes selon la distance** (surpression, chaleur, radiation, mortalité), avec la
+  détonation précédente en gris pour comparer deux engins.
 - **La radioactivité induite** : les neutrons rendent le sol radioactif près du point
   zéro, y compris pour une explosion en altitude (qui ne produit pas de retombées).
 - **L'effet d'écran des bâtiments** : les immeubles masquent l'éclair (ombres, moins
@@ -113,6 +119,7 @@ sans abri : ~450 rad).
 | Vent | direction vers laquelle il souffle et vitesse : orientent et allongent le panache de retombées |
 | Moment de l'explosion | jour (gens au travail, 25 % dehors) ou nuit (gens chez eux, 4 % dehors) |
 | Effet d'écran des bâtiments | active ou non la protection apportée par les immeubles, pour comparer |
+| Courbes selon la distance | ouvre les graphiques des effets (la détonation précédente reste en gris) |
 | Afficher les zones d'effet | cercles au sol des seuils de dégâts |
 | Réinitialiser / Nouvelle ville | remet la ville en état / génère une autre ville |
 
@@ -132,6 +139,8 @@ Godot_v4.7.2-stable_mono_win64.exe --path BlastSim/godot -- --demo --scenario=5 
 | `--city=N` | 1 Paris, 2 Manhattan, 3 Londres, 4 Hiroshima, 5 Beyrouth |
 | `--wind=direction,vitesse` | vent (degrés vers lesquels il souffle, m/s) |
 | `--night` | explosion de nuit |
+| `--charts` | ouvre les courbes selon la distance |
+| `--previous=N` | affiche en gris les courbes du scénario N, pour comparer |
 | `--no-shielding` | désactive l'effet d'écran des bâtiments |
 | `--select=x,z` | ouvre la fiche du bâtiment situé au point (x, z), en mètres |
 | `--time-scale=x` | vitesse du temps |
@@ -164,7 +173,8 @@ Les modèles viennent de sources de référence : modèle de souffle DNA (BLAST.
 Kinney-Graham pour le TNT, *The Effects of Nuclear Weapons* de Glasstone & Dolan pour le
 thermique et la radiation, critères DoD pour les éclats, WSEG-10 pour les retombées,
 HAZUS pour les victimes par état de dégât, Glasstone & Dolan et Ambrosini pour les
-cratères. Les 72 tests automatiques vérifient notamment :
+cratères, Hamada pour la propagation des incendies. Les 77 tests automatiques, lancés à
+chaque envoi sur GitHub, vérifient notamment :
 
 | Cas | Calculé | Référence |
 |---|---|---|

@@ -26,6 +26,10 @@ public partial class Hud : CanvasLayer
     private Label _cityStatus = null!, _attribution = null!;
     private PanelContainer _buildingPanel = null!;
     private CheckBox _shielding = null!;
+    private ChartsPanel _charts = null!;
+    private Button _chartsButton = null!;
+
+    public void ShowCharts() => _chartsButton.ButtonPressed = true;
 
     /// <summary>Effet d'écran des bâtiments sur l'éclair et le souffle (pris en compte à la prochaine détonation).</summary>
     public bool ShieldingEnabled
@@ -138,6 +142,10 @@ public partial class Hud : CanvasLayer
         go.Pressed += () => DetonateRequested?.Invoke();
         box.AddChild(go);
 
+        _chartsButton = new Button { Text = "Courbes selon la distance", ToggleMode = true };
+        _chartsButton.Toggled += on => _charts.Visible = on;
+        box.AddChild(_chartsButton);
+
         var row = new HBoxContainer();
         var reset = new Button { Text = "Réinitialiser", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         reset.Pressed += () => ResetRequested?.Invoke();
@@ -159,6 +167,10 @@ public partial class Hud : CanvasLayer
         };
         help.AddThemeFontSizeOverride("font_size", 13);
         box.AddChild(help);
+
+        // Courbes des effets selon la distance, en haut à gauche sous le suivi en direct.
+        _charts = new ChartsPanel { Visible = false, Position = new Vector2(16, 230) };
+        AddChild(_charts);
 
         // Fiche du bâtiment sélectionné, en bas à gauche.
         _buildingPanel = new PanelContainer { Visible = false, MouseFilter = Control.MouseFilterEnum.Ignore };
@@ -227,6 +239,8 @@ public partial class Hud : CanvasLayer
     }
 
     public void SetCityStatus(string text) => _cityStatus.Text = text;
+
+    public void SetCharts(ChartData data) => _charts.SetData(data);
 
     /// <summary>Affiche la fiche d'un bâtiment, ou la masque (null).</summary>
     public void SetBuildingInfo(string? bbcode)
@@ -325,7 +339,7 @@ public partial class Hud : CanvasLayer
             : $"Puissance : {Format.Yield(YieldValue)}";
         _heightLabel.Text = $"Hauteur d'explosion : {Format.Distance(HeightM)}";
         _timeLabel.Text = $"Vitesse du temps : ×{Format.Scale(TimeScale)}";
-        _windLabel.Text = $"Vent vers {Format.Compass(WindTowardDeg)} — retombées (explosion au sol)";
+        _windLabel.Text = $"Vent vers {Format.Compass(WindTowardDeg)} — incendies, retombées";
         _windSpeedLabel.Text = $"Vitesse du vent : {WindSpeedMs:0.#} m/s ({WindSpeedMs * 3.6:0} km/h)";
     }
 

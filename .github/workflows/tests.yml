@@ -1,0 +1,25 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  physics:
+    name: Moteur physique et villes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # La solution contient la bibliothèque physique, CityData et les tests ;
+      # le projet Godot n'en fait pas partie (il exige le SDK Godot).
+      - name: Compilation
+        run: dotnet build BlastSim/BlastSim.sln --configuration Release
+
+      - name: Tests
+        run: dotnet test BlastSim/BlastSim.sln --configuration Release --no-build --logger "console;verbosity=normal"
